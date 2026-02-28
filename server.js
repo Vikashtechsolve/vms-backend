@@ -14,8 +14,7 @@ import contactRoutes from './routes/contact.js'
 const app = express()
 const PORT = process.env.PORT || 4000
 
-const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173').split(',').map((s) => s.trim()).filter(Boolean)
-app.use(cors({ origin: corsOrigins.length ? corsOrigins : true, credentials: true }))
+app.use(cors({ origin: true, credentials: true }))
 app.use(express.json({ limit: '10mb' }))
 
 app.use('/api/auth', authRoutes)
