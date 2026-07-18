@@ -2,6 +2,7 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import { init } from './config/db.js'
+import { createCorsOptions } from './config/cors.js'
 import authRoutes from './routes/auth.js'
 import vendorsRoutes from './routes/vendors.js'
 import trainersRoutes from './routes/trainers.js'
@@ -14,7 +15,7 @@ import contactRoutes from './routes/contact.js'
 const app = express()
 const PORT = process.env.PORT || 4000
 
-app.use(cors({ origin: true, credentials: true }))
+app.use(cors(createCorsOptions()))
 app.use(express.json({ limit: '10mb' }))
 
 app.use('/api/auth', authRoutes)
