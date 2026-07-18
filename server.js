@@ -27,7 +27,7 @@ app.use('/api/activities', activitiesRoutes)
 app.use('/api/contact', contactRoutes)
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, message: 'VMS Backend running' })
+  res.json({ ok: true, message: 'Trainer Adda Backend running' })
 })
 
 app.use((err, req, res, next) => {
@@ -38,7 +38,7 @@ app.use((err, req, res, next) => {
 async function start() {
   await init()
   app.listen(PORT, () => {
-    console.log(`VMS Backend running at http://localhost:${PORT}`)
+    console.log(`Trainer Adda Backend running at http://localhost:${PORT}`)
   })
 }
 

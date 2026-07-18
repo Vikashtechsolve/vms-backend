@@ -22,7 +22,7 @@ async function uploadImageToCloudinary(buffer) {
   if (!hasCloudinary) return null
   return new Promise((resolve, reject) => {
     cloudinary.uploader.upload_stream(
-      { folder: 'vms/trainers', resource_type: 'image' },
+      { folder: 'traineradda/trainers', resource_type: 'image' },
       (err, result) => {
         if (err) reject(err)
         else resolve(result?.secure_url)
@@ -35,7 +35,7 @@ async function uploadResumeToCloudinary(buffer) {
   if (!hasCloudinary) return null
   return new Promise((resolve, reject) => {
     cloudinary.uploader.upload_stream(
-      { folder: 'vms/trainers/resumes', resource_type: 'raw' },
+      { folder: 'traineradda/trainers/resumes', resource_type: 'raw' },
       (err, result) => {
         if (err) reject(err)
         else resolve(result?.secure_url)
@@ -44,7 +44,12 @@ async function uploadResumeToCloudinary(buffer) {
   })
 }
 
-/** Public trainer registration (no auth) - for VMS website */
+/** Multer can put `{}` on file field names in req.body; only accept real strings. */
+function bodyString(value, fallback = '') {
+  return typeof value === 'string' ? value : fallback
+}
+
+/** Public trainer registration (no auth) - for Trainer Adda website */
 router.post('/register', uploadFields, async (req, res) => {
   try {
     const b = req.body || {}
@@ -114,15 +119,21 @@ router.post('/', uploadFields, async (req, res) => {
     if (typeof comments === 'string') {
       try { comments = JSON.parse(comments) } catch { comments = [] }
     }
-    let photo = b.photo || ''
-    let resume = b.resume || ''
+    let photo = bodyString(b.photo)
+    let resume = bodyString(b.resume)
     if (req.files?.photo?.[0]?.buffer) {
       const url = await uploadImageToCloudinary(req.files.photo[0].buffer)
       if (url) photo = url
+      else if (!hasCloudinary) {
+        return res.status(502).json({ error: 'Photo upload failed. Cloudinary is not configured.' })
+      }
     }
     if (req.files?.resume?.[0]?.buffer) {
       const url = await uploadResumeToCloudinary(req.files.resume[0].buffer)
       if (url) resume = url
+      else if (!hasCloudinary) {
+        return res.status(502).json({ error: 'Resume upload failed. Cloudinary is not configured.' })
+      }
     }
     const trainer = await Trainer.create({
       name: b.name ?? '',
@@ -162,15 +173,21 @@ router.put('/:id', uploadFields, async (req, res) => {
     if (typeof comments === 'string') {
       try { comments = JSON.parse(comments) } catch { comments = undefined }
     }
-    let photo = (b.photo !== undefined && b.photo !== '') ? b.photo : existing.photo
-    let resume = (b.resume !== undefined && b.resume !== '') ? b.resume : existing.resume
+    let photo = bodyString(b.photo, existing.photo)
+    let resume = bodyString(b.resume, existing.resume)
     if (req.files?.photo?.[0]?.buffer) {
       const url = await uploadImageToCloudinary(req.files.photo[0].buffer)
       if (url) photo = url
+      else if (!hasCloudinary) {
+        return res.status(502).json({ error: 'Photo upload failed. Cloudinary is not configured.' })
+      }
     }
     if (req.files?.resume?.[0]?.buffer) {
       const url = await uploadResumeToCloudinary(req.files.resume[0].buffer)
       if (url) resume = url
+      else if (!hasCloudinary) {
+        return res.status(502).json({ error: 'Resume upload failed. Cloudinary is not configured.' })
+      }
     }
     existing.name = b.name ?? existing.name
     existing.photo = photo

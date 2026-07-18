@@ -23,7 +23,7 @@ async function uploadResumeToCloudinary(buffer) {
   if (!hasCloudinary) return null
   return new Promise((resolve, reject) => {
     cloudinary.uploader.upload_stream(
-      { folder: 'vms/applications/resumes', resource_type: 'raw' },
+      { folder: 'traineradda/applications/resumes', resource_type: 'raw' },
       (err, result) => {
         if (err) reject(err)
         else resolve(result?.secure_url)
@@ -97,7 +97,7 @@ router.post('/:id/apply', upload.single('resume'), async (req, res) => {
   }
 })
 
-/** Public job submission (no auth) - for VMS website "Post a Job" form */
+/** Public job submission (no auth) - for Trainer Adda website "Post a Job" form */
 router.post('/submit', async (req, res) => {
   try {
     const b = req.body || {}

@@ -1,7 +1,7 @@
 {
-  "name": "vms-backend",
+  "name": "traineradda-backend",
   "version": "1.0.0",
-  "description": "VMS Express backend - auth, vendors, trainers, jobs, dashboard, activities",
+  "description": "Trainer Adda Express backend - auth, vendors, trainers, jobs, dashboard, activities",
   "type": "module",
   "main": "server.js",
   "scripts": {

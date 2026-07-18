@@ -5,7 +5,7 @@ import { logActivity } from '../helpers/activities.js'
 
 const router = Router()
 
-/** Public company/vendor registration (no auth) - for VMS website */
+/** Public company/vendor registration (no auth) - for Trainer Adda website */
 router.post('/register', async (req, res) => {
   try {
     const b = req.body || {}
