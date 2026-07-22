@@ -1,4 +1,5 @@
 import mongoose from 'mongoose'
+import { normalizeContact, normalizeEmail } from '../helpers/trainerFields.js'
 
 const commentSchema = new mongoose.Schema({
   id: String,
@@ -12,8 +13,10 @@ const commentSchema = new mongoose.Schema({
 const trainerSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, default: '' },
+    email: { type: String, trim: true, lowercase: true, default: '' },
     photo: { type: String, default: '' },
     contact: { type: String, default: '' },
+    contactNormalized: { type: String, default: '' },
     location: { type: String, default: '' },
     qualification: { type: String, default: '' },
     passingYear: { type: String, default: '' },
@@ -30,11 +33,30 @@ const trainerSchema = new mongoose.Schema(
   { timestamps: true }
 )
 
+trainerSchema.pre('validate', function normalizeFields(next) {
+  if (this.email) this.email = normalizeEmail(this.email)
+  if (this.contact) {
+    this.contact = String(this.contact).trim()
+    this.contactNormalized = normalizeContact(this.contact)
+  }
+  next()
+})
+
+trainerSchema.index(
+  { email: 1 },
+  { unique: true, partialFilterExpression: { email: { $gt: '' } } }
+)
+trainerSchema.index(
+  { contactNormalized: 1 },
+  { unique: true, partialFilterExpression: { contactNormalized: { $gt: '' } } }
+)
+
 trainerSchema.set('toJSON', {
   transform: (doc, ret) => {
     ret.id = ret._id.toString()
     delete ret._id
     delete ret.__v
+    delete ret.contactNormalized
     return ret
   },
 })

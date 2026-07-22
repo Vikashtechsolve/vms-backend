@@ -4,6 +4,13 @@ import Trainer from '../models/Trainer.js'
 import multer from 'multer'
 import { v2 as cloudinary } from 'cloudinary'
 import { logActivity } from '../helpers/activities.js'
+import {
+  buildTrainerData,
+  checkTrainerAvailability,
+  findTrainerConflict,
+  trainerDuplicateMessage,
+  validateTrainerInput,
+} from '../helpers/trainerFields.js'
 
 const router = Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }) // 5MB per file
@@ -53,6 +60,14 @@ function bodyString(value, fallback = '') {
 router.post('/register', uploadFields, async (req, res) => {
   try {
     const b = req.body || {}
+    const validated = validateTrainerInput(b)
+    if (validated.errors.length) {
+      return res.status(400).json({ error: validated.errors[0] })
+    }
+
+    const conflict = await findTrainerConflict(Trainer, validated)
+    if (conflict) return res.status(409).json({ error: conflict })
+
     let photo = ''
     let resume = ''
     if (req.files?.photo?.[0]?.buffer) {
@@ -64,24 +79,15 @@ router.post('/register', uploadFields, async (req, res) => {
       if (url) resume = url
     }
     const trainer = await Trainer.create({
-      name: b.name ?? '',
+      ...buildTrainerData(b, validated),
       photo,
       resume,
-      contact: b.contact ?? '',
-      location: b.location ?? '',
-      qualification: b.qualification ?? '',
-      passingYear: b.passingYear ?? '',
-      subject: b.subject ?? '',
-      teachingExperience: b.teachingExperience ?? '',
-      developmentExperience: b.developmentExperience ?? '',
-      totalExperience: b.totalExperience ?? '',
-      workLookingFor: b.workLookingFor ?? 'Full-Time Trainer',
-      mode: b.mode ?? 'Offline Mode',
-      payoutExpectations: b.payoutExpectations ?? '',
     })
     res.status(201).json(trainer.toJSON())
   } catch (err) {
     console.error('Trainer register error:', err)
+    const duplicate = trainerDuplicateMessage(err)
+    if (duplicate) return res.status(409).json({ error: duplicate })
     if (err.message && err.message.includes('Cloudinary')) {
       return res.status(502).json({ error: 'Upload failed. Check Cloudinary config.' })
     }
@@ -101,6 +107,22 @@ router.get('/', async (req, res) => {
   }
 })
 
+/** Live duplicate check for admin form (single query for email + mobile). */
+router.get('/check-availability', async (req, res) => {
+  try {
+    const { email, contact, excludeId } = req.query
+    const result = await checkTrainerAvailability(Trainer, {
+      email: bodyString(email),
+      contact: bodyString(contact),
+      excludeId: bodyString(excludeId) || undefined,
+    })
+    res.json(result)
+  } catch (err) {
+    console.error('Trainer availability check error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
 router.get('/:id', async (req, res) => {
   try {
     const doc = await Trainer.findById(req.params.id)
@@ -115,6 +137,14 @@ router.get('/:id', async (req, res) => {
 router.post('/', uploadFields, async (req, res) => {
   try {
     const b = req.body || {}
+    const validated = validateTrainerInput(b)
+    if (validated.errors.length) {
+      return res.status(400).json({ error: validated.errors[0] })
+    }
+
+    const conflict = await findTrainerConflict(Trainer, validated)
+    if (conflict) return res.status(409).json({ error: conflict })
+
     let comments = b.comments
     if (typeof comments === 'string') {
       try { comments = JSON.parse(comments) } catch { comments = [] }
@@ -136,19 +166,8 @@ router.post('/', uploadFields, async (req, res) => {
       }
     }
     const trainer = await Trainer.create({
-      name: b.name ?? '',
+      ...buildTrainerData(b, validated),
       photo,
-      contact: b.contact ?? '',
-      location: b.location ?? '',
-      qualification: b.qualification ?? '',
-      passingYear: b.passingYear ?? '',
-      subject: b.subject ?? '',
-      teachingExperience: b.teachingExperience ?? '',
-      developmentExperience: b.developmentExperience ?? '',
-      totalExperience: b.totalExperience ?? '',
-      workLookingFor: b.workLookingFor ?? 'Full-Time Trainer',
-      mode: b.mode ?? 'Offline Mode',
-      payoutExpectations: b.payoutExpectations ?? '',
       resume,
       comments: comments ?? [],
     })
@@ -157,6 +176,8 @@ router.post('/', uploadFields, async (req, res) => {
     res.status(201).json(out)
   } catch (err) {
     console.error('Trainer create/upload error:', err)
+    const duplicate = trainerDuplicateMessage(err)
+    if (duplicate) return res.status(409).json({ error: duplicate })
     if (err.message && err.message.includes('Cloudinary')) {
       return res.status(502).json({ error: 'Photo upload failed. Check Cloudinary config.' })
     }
@@ -169,6 +190,22 @@ router.put('/:id', uploadFields, async (req, res) => {
     const existing = await Trainer.findById(req.params.id)
     if (!existing) return res.status(404).json({ error: 'Trainer not found' })
     const b = req.body || {}
+
+    const validated = validateTrainerInput({
+      name: b.name ?? existing.name,
+      email: b.email ?? existing.email,
+      contact: b.contact ?? existing.contact,
+    }, { requireEmail: false })
+    if (validated.errors.length) {
+      return res.status(400).json({ error: validated.errors[0] })
+    }
+
+    const conflict = await findTrainerConflict(Trainer, {
+      ...validated,
+      excludeId: existing._id,
+    })
+    if (conflict) return res.status(409).json({ error: conflict })
+
     let comments = b.comments
     if (typeof comments === 'string') {
       try { comments = JSON.parse(comments) } catch { comments = undefined }
@@ -189,9 +226,11 @@ router.put('/:id', uploadFields, async (req, res) => {
         return res.status(502).json({ error: 'Resume upload failed. Cloudinary is not configured.' })
       }
     }
-    existing.name = b.name ?? existing.name
+    existing.name = validated.name
+    existing.email = validated.email
+    existing.contact = validated.contact
+    existing.contactNormalized = validated.contactNormalized
     existing.photo = photo
-    existing.contact = b.contact ?? existing.contact
     existing.location = b.location ?? existing.location
     existing.qualification = b.qualification ?? existing.qualification
     existing.passingYear = b.passingYear ?? existing.passingYear
@@ -210,6 +249,8 @@ router.put('/:id', uploadFields, async (req, res) => {
     res.json(out)
   } catch (err) {
     console.error('Trainer update/upload error:', err)
+    const duplicate = trainerDuplicateMessage(err)
+    if (duplicate) return res.status(409).json({ error: duplicate })
     if (err.name === 'CastError') return res.status(404).json({ error: 'Trainer not found' })
     if (err.message && err.message.includes('Cloudinary')) {
       return res.status(502).json({ error: 'Photo upload failed. Check Cloudinary config.' })

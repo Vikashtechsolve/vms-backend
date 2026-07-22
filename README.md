@@ -12,5 +12,5 @@ Express backend for the Trainer Adda Admin panel and website. Handles authentica
 
 - `MONGODB_URI` – MongoDB connection string
 - `JWT_SECRET` – secret for admin auth
-- `CORS_ORIGINS` – comma-separated frontend origins; use `*` to allow all origins
+- CORS allows all origins by default (no configuration needed)
 - Cloudinary keys for trainer photo/resume uploads
