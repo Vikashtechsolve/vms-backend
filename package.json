@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "backfill:trainers": "node scripts/backfillTrainers.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -9,9 +9,19 @@ router.use(authMiddleware)
 
 router.get('/stats', async (req, res) => {
   try {
-    const numberOfTrainers = await Trainer.countDocuments()
-    const numberOfVendors = await Vendor.countDocuments()
-    const activeTrainers = await Trainer.countDocuments({ workLookingFor: { $exists: true, $ne: '' } })
+    const adminOnly = {
+      $or: [
+        { source: 'admin' },
+        { source: { $exists: false } },
+        { source: null },
+      ],
+    }
+    const numberOfTrainers = await Trainer.countDocuments(adminOnly)
+    const numberOfVendors = await Vendor.countDocuments(adminOnly)
+    const activeTrainers = await Trainer.countDocuments({
+      ...adminOnly,
+      workLookingFor: { $exists: true, $ne: '' },
+    })
     res.json({
       numberOfTrainers,
       numberOfVendors,

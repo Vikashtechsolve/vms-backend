@@ -108,6 +108,69 @@ export function validateTrainerInput({ name, email, contact }, { requireEmail = 
   }
 }
 
+const TRAINER_STATUS_VALUES = new Set(['', 'available', 'not_available'])
+
+export function parseTrainerRating(value) {
+  if (value == null || value === '') return null
+  const n = Number(value)
+  if (Number.isNaN(n) || n < 0 || n > 10) return { error: 'Rating must be a number between 0 and 10.' }
+  return { value: Math.round(n * 10) / 10 }
+}
+
+export function normalizeLinkedinUrl(url) {
+  const trimmed = String(url || '').trim()
+  if (!trimmed) return { value: '' }
+
+  let href = trimmed
+  if (!/^https?:\/\//i.test(href)) href = `https://${href}`
+
+  try {
+    const parsed = new URL(href)
+    if (!parsed.hostname.replace(/^www\./, '').includes('linkedin.com')) {
+      return { error: 'Enter a valid LinkedIn profile URL.' }
+    }
+    return { value: parsed.href.replace(/\/$/, '') }
+  } catch {
+    return { error: 'Enter a valid LinkedIn profile URL.' }
+  }
+}
+
+export function normalizeTrainerStatus(status) {
+  const raw = String(status || '').trim().toLowerCase().replace(/\s+/g, '_')
+  const normalized =
+    raw === 'available' ? 'available'
+      : raw === 'not_available' || raw === 'unavailable' || raw === 'notavailable' ? 'not_available'
+        : raw === '' ? ''
+          : null
+
+  if (normalized === null) return { error: 'Status must be Available or Not Available.' }
+  return { value: normalized }
+}
+
+export function validateTrainerOptionalFields(b = {}) {
+  const errors = []
+  const optional = {
+    additionalDetails: String(b.additionalDetails ?? '').trim(),
+    rating: null,
+    linkedinUrl: '',
+    status: '',
+  }
+
+  const ratingResult = parseTrainerRating(b.rating)
+  if (ratingResult?.error) errors.push(ratingResult.error)
+  else optional.rating = ratingResult?.value ?? null
+
+  const linkedinResult = normalizeLinkedinUrl(b.linkedinUrl)
+  if (linkedinResult.error) errors.push(linkedinResult.error)
+  else optional.linkedinUrl = linkedinResult.value
+
+  const statusResult = normalizeTrainerStatus(b.status)
+  if (statusResult.error) errors.push(statusResult.error)
+  else optional.status = statusResult.value
+
+  return { errors, ...optional }
+}
+
 export async function findTrainerConflict(Trainer, { email, contact, excludeId }) {
   const availability = await checkTrainerAvailability(Trainer, { email, contact, excludeId })
   if (!availability.email.available) return availability.email.message
@@ -125,13 +188,15 @@ export function trainerDuplicateMessage(err) {
   return 'A trainer with these details already exists.'
 }
 
-export function buildTrainerData(b, validated) {
+export function buildTrainerData(b, validated, optional = {}, place = {}) {
   return {
     name: validated.name,
     email: validated.email,
     contact: validated.contact,
     contactNormalized: validated.contactNormalized,
-    location: b.location ?? '',
+    location: place.location ?? b.location ?? '',
+    city: place.city ?? '',
+    state: place.state ?? '',
     qualification: b.qualification ?? '',
     passingYear: b.passingYear ?? '',
     subject: b.subject ?? '',
@@ -141,5 +206,9 @@ export function buildTrainerData(b, validated) {
     workLookingFor: b.workLookingFor ?? 'Full-Time Trainer',
     mode: b.mode ?? 'Offline Mode',
     payoutExpectations: b.payoutExpectations ?? '',
+    rating: optional.rating ?? null,
+    linkedinUrl: optional.linkedinUrl ?? '',
+    status: optional.status ?? '',
+    additionalDetails: optional.additionalDetails ?? '',
   }
 }

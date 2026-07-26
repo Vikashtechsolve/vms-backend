@@ -14,9 +14,13 @@ const vendorSchema = new mongoose.Schema(
     mode: { type: String, default: '' },
     logo: { type: String, default: '' },
     logoTint: { type: String, default: '' },
+    /** admin = manual record; website = public registration awaiting shift */
+    source: { type: String, enum: ['admin', 'website'], default: 'admin', index: true },
   },
   { timestamps: true }
 )
+
+vendorSchema.index({ source: 1 })
 
 vendorSchema.set('toJSON', {
   transform: (doc, ret) => {

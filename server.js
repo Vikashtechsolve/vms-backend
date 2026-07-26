@@ -11,6 +11,8 @@ import importantLinksRoutes from './routes/importantLinks.js'
 import dashboardRoutes from './routes/dashboard.js'
 import activitiesRoutes from './routes/activities.js'
 import contactRoutes from './routes/contact.js'
+import locationsRoutes from './routes/locations.js'
+import { backfillTrainers } from './helpers/backfillTrainers.js'
 
 const app = express()
 const PORT = process.env.PORT || 4000
@@ -26,6 +28,7 @@ app.use('/api/important-links', importantLinksRoutes)
 app.use('/api/dashboard', dashboardRoutes)
 app.use('/api/activities', activitiesRoutes)
 app.use('/api/contact', contactRoutes)
+app.use('/api/locations', locationsRoutes)
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, message: 'Trainer Adda Backend running' })
@@ -38,6 +41,8 @@ app.use((err, req, res, next) => {
 
 async function start() {
   await init()
+  // Older trainer records predate the derived filter fields; this is a no-op once done.
+  await backfillTrainers().catch((err) => console.error('Trainer backfill skipped:', err.message))
   app.listen(PORT, () => {
     console.log(`Trainer Adda Backend running at http://localhost:${PORT}`)
   })

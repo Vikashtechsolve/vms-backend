@@ -10,7 +10,15 @@ import {
   findTrainerConflict,
   trainerDuplicateMessage,
   validateTrainerInput,
+  validateTrainerOptionalFields,
 } from '../helpers/trainerFields.js'
+import { resolveTrainerLocation } from '../helpers/locationFields.js'
+import {
+  buildTrainerPagination,
+  buildTrainerQuery,
+  buildTrainerSort,
+  getTrainerFilterOptions,
+} from '../helpers/trainerQuery.js'
 
 const router = Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }) // 5MB per file
@@ -38,11 +46,23 @@ async function uploadImageToCloudinary(buffer) {
   })
 }
 
-async function uploadResumeToCloudinary(buffer) {
+async function uploadResumeToCloudinary(buffer, originalName = 'resume') {
   if (!hasCloudinary) return null
+  const rawName = String(originalName || 'resume').replace(/[^\w.\-]+/g, '_').slice(0, 80)
+  const extMatch = rawName.match(/\.([a-z0-9]{2,5})$/i)
+  const ext = extMatch ? extMatch[1].toLowerCase() : ''
+  const base = rawName.replace(/\.[^.]+$/, '') || 'resume'
+  // Include extension in public_id so Cloudinary URLs remain previewable.
+  const publicId = `${Date.now()}-${base}${ext ? `.${ext}` : ''}`
   return new Promise((resolve, reject) => {
     cloudinary.uploader.upload_stream(
-      { folder: 'traineradda/trainers/resumes', resource_type: 'raw' },
+      {
+        folder: 'traineradda/trainers/resumes',
+        resource_type: 'raw',
+        public_id: publicId,
+        use_filename: false,
+        unique_filename: false,
+      },
       (err, result) => {
         if (err) reject(err)
         else resolve(result?.secure_url)
@@ -65,6 +85,16 @@ router.post('/register', uploadFields, async (req, res) => {
       return res.status(400).json({ error: validated.errors[0] })
     }
 
+    const optional = validateTrainerOptionalFields(b)
+    if (optional.errors.length) {
+      return res.status(400).json({ error: optional.errors[0] })
+    }
+
+    const place = resolveTrainerLocation(b)
+    if (place.errors.length) {
+      return res.status(400).json({ error: place.errors[0] })
+    }
+
     const conflict = await findTrainerConflict(Trainer, validated)
     if (conflict) return res.status(409).json({ error: conflict })
 
@@ -75,13 +105,14 @@ router.post('/register', uploadFields, async (req, res) => {
       if (url) photo = url
     }
     if (req.files?.resume?.[0]?.buffer) {
-      const url = await uploadResumeToCloudinary(req.files.resume[0].buffer)
+      const url = await uploadResumeToCloudinary(req.files.resume[0].buffer, req.files.resume[0].originalname)
       if (url) resume = url
     }
     const trainer = await Trainer.create({
-      ...buildTrainerData(b, validated),
+      ...buildTrainerData(b, validated, optional, place),
       photo,
       resume,
+      source: 'website',
     })
     res.status(201).json(trainer.toJSON())
   } catch (err) {
@@ -97,12 +128,37 @@ router.post('/register', uploadFields, async (req, res) => {
 
 router.use(authMiddleware)
 
+/** Filtered, sorted and paginated trainer list. */
 router.get('/', async (req, res) => {
   try {
-    const list = await Trainer.find().sort({ createdAt: -1 })
-    res.json(list.map((doc) => doc.toJSON()))
+    const filter = buildTrainerQuery(req.query)
+    const sort = buildTrainerSort(req.query.sort)
+    const { page, limit, skip } = buildTrainerPagination(req.query)
+
+    const [items, total] = await Promise.all([
+      Trainer.find(filter).sort(sort).skip(skip).limit(limit),
+      Trainer.countDocuments(filter),
+    ])
+
+    res.json({
+      items: items.map((doc) => doc.toJSON()),
+      total,
+      page,
+      limit,
+      pages: Math.max(Math.ceil(total / limit), 1),
+    })
   } catch (err) {
-    console.error(err)
+    console.error('Trainer list error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+/** Facet values for the filter panel, derived from the existing records. */
+router.get('/filter-options', async (req, res) => {
+  try {
+    res.json(await getTrainerFilterOptions(Trainer, req.query))
+  } catch (err) {
+    console.error('Trainer filter options error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -142,6 +198,16 @@ router.post('/', uploadFields, async (req, res) => {
       return res.status(400).json({ error: validated.errors[0] })
     }
 
+    const optional = validateTrainerOptionalFields(b)
+    if (optional.errors.length) {
+      return res.status(400).json({ error: optional.errors[0] })
+    }
+
+    const place = resolveTrainerLocation(b)
+    if (place.errors.length) {
+      return res.status(400).json({ error: place.errors[0] })
+    }
+
     const conflict = await findTrainerConflict(Trainer, validated)
     if (conflict) return res.status(409).json({ error: conflict })
 
@@ -159,17 +225,18 @@ router.post('/', uploadFields, async (req, res) => {
       }
     }
     if (req.files?.resume?.[0]?.buffer) {
-      const url = await uploadResumeToCloudinary(req.files.resume[0].buffer)
+      const url = await uploadResumeToCloudinary(req.files.resume[0].buffer, req.files.resume[0].originalname)
       if (url) resume = url
       else if (!hasCloudinary) {
         return res.status(502).json({ error: 'Resume upload failed. Cloudinary is not configured.' })
       }
     }
     const trainer = await Trainer.create({
-      ...buildTrainerData(b, validated),
+      ...buildTrainerData(b, validated, optional, place),
       photo,
       resume,
       comments: comments ?? [],
+      source: 'admin',
     })
     const out = trainer.toJSON()
     await logActivity(`New trainer profile added: ${out.name}`, 'Just now')
@@ -200,6 +267,25 @@ router.put('/:id', uploadFields, async (req, res) => {
       return res.status(400).json({ error: validated.errors[0] })
     }
 
+    const optional = validateTrainerOptionalFields({
+      rating: b.rating !== undefined ? b.rating : existing.rating,
+      linkedinUrl: b.linkedinUrl !== undefined ? b.linkedinUrl : existing.linkedinUrl,
+      status: b.status !== undefined ? b.status : existing.status,
+      additionalDetails: b.additionalDetails !== undefined ? b.additionalDetails : existing.additionalDetails,
+    })
+    if (optional.errors.length) {
+      return res.status(400).json({ error: optional.errors[0] })
+    }
+
+    const place = resolveTrainerLocation({
+      city: b.city !== undefined ? b.city : existing.city,
+      state: b.state !== undefined ? b.state : existing.state,
+      location: b.location !== undefined ? b.location : existing.location,
+    })
+    if (place.errors.length) {
+      return res.status(400).json({ error: place.errors[0] })
+    }
+
     const conflict = await findTrainerConflict(Trainer, {
       ...validated,
       excludeId: existing._id,
@@ -220,7 +306,7 @@ router.put('/:id', uploadFields, async (req, res) => {
       }
     }
     if (req.files?.resume?.[0]?.buffer) {
-      const url = await uploadResumeToCloudinary(req.files.resume[0].buffer)
+      const url = await uploadResumeToCloudinary(req.files.resume[0].buffer, req.files.resume[0].originalname)
       if (url) resume = url
       else if (!hasCloudinary) {
         return res.status(502).json({ error: 'Resume upload failed. Cloudinary is not configured.' })
@@ -231,7 +317,9 @@ router.put('/:id', uploadFields, async (req, res) => {
     existing.contact = validated.contact
     existing.contactNormalized = validated.contactNormalized
     existing.photo = photo
-    existing.location = b.location ?? existing.location
+    existing.location = place.location
+    existing.city = place.city
+    existing.state = place.state
     existing.qualification = b.qualification ?? existing.qualification
     existing.passingYear = b.passingYear ?? existing.passingYear
     existing.subject = b.subject ?? existing.subject
@@ -241,6 +329,10 @@ router.put('/:id', uploadFields, async (req, res) => {
     existing.workLookingFor = b.workLookingFor ?? existing.workLookingFor
     existing.mode = b.mode ?? existing.mode
     existing.payoutExpectations = b.payoutExpectations ?? existing.payoutExpectations
+    existing.rating = optional.rating
+    existing.linkedinUrl = optional.linkedinUrl
+    existing.status = optional.status
+    existing.additionalDetails = optional.additionalDetails
     existing.resume = resume
     if (comments !== undefined) existing.comments = comments
     await existing.save()
@@ -256,6 +348,26 @@ router.put('/:id', uploadFields, async (req, res) => {
       return res.status(502).json({ error: 'Photo upload failed. Check Cloudinary config.' })
     }
     res.status(500).json({ error: err.message || 'Server error' })
+  }
+})
+
+/** Move a website registration into Trainer Records. */
+router.post('/:id/shift-to-record', async (req, res) => {
+  try {
+    const trainer = await Trainer.findById(req.params.id)
+    if (!trainer) return res.status(404).json({ error: 'Trainer not found' })
+    if (trainer.source === 'admin') {
+      return res.json(trainer.toJSON())
+    }
+    trainer.source = 'admin'
+    await trainer.save()
+    const out = trainer.toJSON()
+    await logActivity(`Trainer registration shifted to records: ${out.name}`, 'Just now')
+    res.json(out)
+  } catch (err) {
+    if (err.name === 'CastError') return res.status(404).json({ error: 'Trainer not found' })
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
   }
 })
 

@@ -28,6 +28,24 @@ router.post('/', async (req, res) => {
   }
 })
 
+router.put('/:id', async (req, res) => {
+  try {
+    const { description, url } = req.body || {}
+    if (!description || !url) return res.status(400).json({ error: 'description and url required' })
+    const link = await ImportantLink.findByIdAndUpdate(
+      req.params.id,
+      { description: description.trim(), url: url.trim() },
+      { new: true }
+    )
+    if (!link) return res.status(404).json({ error: 'Link not found' })
+    res.json({ id: link._id.toString(), description: link.description, url: link.url })
+  } catch (err) {
+    if (err.name === 'CastError') return res.status(404).json({ error: 'Link not found' })
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
 router.delete('/:id', async (req, res) => {
   try {
     const link = await ImportantLink.findByIdAndDelete(req.params.id)
