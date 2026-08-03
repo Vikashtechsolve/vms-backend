@@ -1,5 +1,14 @@
 import mongoose from 'mongoose'
 
+const commentSchema = new mongoose.Schema({
+  id: String,
+  authorName: String,
+  authorInitials: String,
+  text: String,
+  createdAt: String,
+  verified: Boolean,
+}, { _id: false })
+
 const vendorSchema = new mongoose.Schema(
   {
     company: { type: String, default: '' },
@@ -16,6 +25,7 @@ const vendorSchema = new mongoose.Schema(
     logoTint: { type: String, default: '' },
     /** admin = manual record; website = public registration awaiting shift */
     source: { type: String, enum: ['admin', 'website'], default: 'admin', index: true },
+    comments: { type: [commentSchema], default: [] },
   },
   { timestamps: true }
 )

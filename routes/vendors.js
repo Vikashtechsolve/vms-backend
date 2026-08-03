@@ -22,6 +22,14 @@ function sourceFilter(source) {
   return null
 }
 
+function parseComments(raw) {
+  if (raw === undefined) return undefined
+  if (typeof raw === 'string') {
+    try { return JSON.parse(raw) } catch { return [] }
+  }
+  return raw ?? []
+}
+
 /** Public company/vendor registration (no auth) - for Trainer Adda website */
 router.post('/register', async (req, res) => {
   try {
@@ -91,6 +99,7 @@ router.post('/', async (req, res) => {
       mode: b.mode ?? '',
       logo: b.logo ?? '',
       logoTint: b.logoTint ?? '',
+      comments: parseComments(b.comments) ?? [],
       source: 'admin',
     })
     const out = vendor.toJSON()
@@ -121,6 +130,8 @@ router.put('/:id', async (req, res) => {
     if (req.body.source === 'admin' || req.body.source === 'website') {
       update.source = req.body.source
     }
+    const comments = parseComments(req.body.comments)
+    if (comments !== undefined) update.comments = comments
     const vendor = await Vendor.findByIdAndUpdate(req.params.id, update, { new: true, runValidators: true })
     if (!vendor) return res.status(404).json({ error: 'Vendor not found' })
     const out = vendor.toJSON()
