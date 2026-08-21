@@ -1,3 +1,4 @@
+import crypto from 'crypto'
 import mongoose from 'mongoose'
 import { normalizeContact, normalizeEmail } from '../helpers/trainerFields.js'
 import { deriveTrainerFacets } from './../helpers/trainerFacets.js'
@@ -46,6 +47,13 @@ const trainerSchema = new mongoose.Schema(
     workTypes: { type: [String], default: [] },
     modes: { type: [String], default: [] },
     qualificationTag: { type: String, default: '' },
+
+    emailOptIn: { type: Boolean, default: true },
+    whatsappOptIn: { type: Boolean, default: false },
+    smsOptIn: { type: Boolean, default: false },
+    unsubscribedAt: { type: Date },
+    whatsappOptUnsubscribedAt: { type: Date },
+    unsubscribeToken: { type: String, default: '' },
   },
   { timestamps: true }
 )
@@ -59,6 +67,9 @@ trainerSchema.pre('validate', function normalizeFields(next) {
 
   // Derived here rather than per route so every write path stays in sync.
   Object.assign(this, deriveTrainerFacets(this))
+  if (!this.unsubscribeToken) {
+    this.unsubscribeToken = crypto.randomBytes(24).toString('hex')
+  }
   next()
 })
 
