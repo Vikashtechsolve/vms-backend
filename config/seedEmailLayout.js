@@ -1,61 +1,76 @@
 import EmailLayout from '../models/EmailLayout.js'
 
-/** Header opens the content cell; footer closes it. No outer wrapper — safe for admin preview. */
+export const DEFAULT_LOGO_URL =
+  'https://res.cloudinary.com/dc4gqqd35/image/upload/w_280,f_auto,q_auto/v1787319069/traineradda_bfnnbn.jpg'
+
+/** Header opens the content cell; footer closes it. Logo only — no extra brand text. */
 const DEFAULT_HEADER = `
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;margin:0 auto;background-color:#ffffff;border-collapse:collapse;">
   <tr>
-    <td style="padding:22px 28px 18px;background-color:#ffffff;border-bottom:1px solid #e5e7eb;">
-      <a href="{{siteUrl}}" target="_blank" style="text-decoration:none;display:block;">
-        <img src="{{logoUrl}}" alt="Trainer Adda" width="200" style="display:block;border:0;height:auto;max-width:200px;width:200px;" />
+    <td align="center" style="padding:28px 32px 24px;background-color:#ffffff;border-bottom:1px solid #e5e7eb;">
+      <a href="{{siteUrl}}" target="_blank" style="text-decoration:none;display:inline-block;">
+        <img src="{{logoUrl}}" alt="Trainer Adda — Train. Empower. Excel." width="280" style="display:block;border:0;height:auto;max-width:280px;width:100%;margin:0 auto;" />
       </a>
     </td>
   </tr>
   <tr>
-    <td style="padding:12px 28px;background-color:#fef2f2;border-bottom:1px solid #fecaca;">
-      <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:600;color:#b91c1c;line-height:1.4;">
-        New training opportunity for you
-      </p>
+    <td style="padding:0 32px;background-color:#ffffff;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td style="padding:12px 16px;background-color:#fff5f5;border-left:4px solid #C1272D;border-radius:0 8px 8px 0;">
+            <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:600;color:#C1272D;line-height:1.45;">
+              New training opportunity for you
+            </p>
+          </td>
+        </tr>
+      </table>
     </td>
   </tr>
   <tr>
-    <td style="padding:28px 32px 8px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.7;color:#1f2937;background-color:#ffffff;">
+    <td style="height:20px;font-size:0;line-height:0;background-color:#ffffff;">&nbsp;</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 32px 8px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.7;color:#1f2937;background-color:#ffffff;">
 `
 
 const DEFAULT_FOOTER = `
     </td>
   </tr>
   <tr>
-    <td style="padding:16px 32px 24px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1f2937;background-color:#ffffff;border-top:1px solid #f1f5f9;">
-      <p style="margin:0 0 4px;font-size:14px;color:#64748b;">Best regards,</p>
-      <p style="margin:0;font-size:14px;font-weight:600;color:#111827;">Team Trainer Adda</p>
+    <td style="padding:20px 32px 28px;font-family:Arial,Helvetica,sans-serif;background-color:#ffffff;border-top:1px solid #f1f5f9;">
+      <p style="margin:0 0 4px;font-size:14px;color:#64748b;line-height:1.5;">Best regards,</p>
+      <p style="margin:0;font-size:14px;font-weight:600;color:#111827;line-height:1.5;">Team Trainer Adda</p>
     </td>
   </tr>
   <tr>
-    <td style="padding:24px 28px;background-color:#2C3447;text-align:center;">
-      <p style="margin:0 0 6px;font-family:Arial,Helvetica,sans-serif;font-size:17px;font-weight:800;color:#ffffff;line-height:1.2;text-transform:uppercase;letter-spacing:0.04em;">
-        Trainer <span style="color:#e85d63;">Adda</span>
-      </p>
-      <p style="margin:0 0 14px;font-family:Arial,Helvetica,sans-serif;font-size:10px;font-weight:600;color:#94a3b8;letter-spacing:0.16em;text-transform:uppercase;">
-        Train. Empower. Excel.
-      </p>
-      <p style="margin:0 0 12px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.6;color:#e2e8f0;">
+    <td style="padding:28px 32px;background-color:#2C3447;text-align:center;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto 16px;">
+        <tr>
+          <td style="width:24px;height:2px;background-color:#C1272D;font-size:0;line-height:0;">&nbsp;</td>
+          <td style="padding:0 12px;font-family:Arial,Helvetica,sans-serif;font-size:10px;font-weight:600;color:#94a3b8;letter-spacing:0.2em;text-transform:uppercase;white-space:nowrap;">
+            Train. Empower. Excel.
+          </td>
+          <td style="width:24px;height:2px;background-color:#64748b;font-size:0;line-height:0;">&nbsp;</td>
+        </tr>
+      </table>
+      <p style="margin:0 0 14px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.65;color:#e2e8f0;">
         <a href="mailto:support@traineradda.com" style="color:#ffffff;text-decoration:none;">support@traineradda.com</a>
-        <span style="color:#64748b;"> &middot; </span>
+        <span style="color:#64748b;"> &nbsp;&middot;&nbsp; </span>
         <a href="tel:+918320353164" style="color:#ffffff;text-decoration:none;">+91 83203 53164</a>
       </p>
-      <p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#94a3b8;line-height:1.5;">
+      <p style="margin:0 0 18px;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#94a3b8;line-height:1.55;">
         Connecting trainers with colleges &amp; corporates across India
       </p>
-      <p style="margin:0 0 12px;font-family:Arial,Helvetica,sans-serif;font-size:13px;">
-        <a href="{{siteUrl}}" target="_blank" style="color:#60a5fa;text-decoration:none;font-weight:600;">traineradda.com</a>
+      <p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.5;">
+        <a href="{{siteUrl}}" target="_blank" style="color:#60a5fa;text-decoration:none;font-weight:600;">Visit traineradda.com</a>
       </p>
-      <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#64748b;">
+      <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#64748b;line-height:1.5;">
         <a href="{{unsubscribeUrl}}" style="color:#94a3b8;text-decoration:underline;">Unsubscribe</a> from requirement alerts
       </p>
     </td>
   </tr>
   <tr>
-    <td style="padding:14px 28px;background-color:#f8fafc;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#94a3b8;border-top:1px solid #e5e7eb;">
+    <td align="center" style="padding:14px 32px;background-color:#232b3e;font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#64748b;line-height:1.5;">
       &copy; Trainer Adda. All rights reserved.
     </td>
   </tr>

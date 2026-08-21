@@ -7,7 +7,6 @@ export const MERGE_TAGS = [
   'skills',
   'unsubscribeUrl',
   'logoUrl',
-  'logoUrlLight',
   'siteUrl',
 ]
 

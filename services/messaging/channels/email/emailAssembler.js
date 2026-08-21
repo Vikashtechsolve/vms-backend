@@ -13,8 +13,9 @@ export async function assembleEmailHtml({ layout, campaign, trainer, extraTags =
 
   const tags = {
     unsubscribeUrl,
-    logoUrl: process.env.EMAIL_LOGO_URL || `${baseUrl}/public/email/logo-nav.png`,
-    logoUrlLight: process.env.EMAIL_LOGO_LIGHT_URL || `${baseUrl}/public/email/logo-light.png`,
+    logoUrl:
+      process.env.EMAIL_LOGO_URL ||
+      'https://res.cloudinary.com/dc4gqqd35/image/upload/w_280,f_auto,q_auto/v1787319069/traineradda_bfnnbn.jpg',
     siteUrl: (process.env.SITE_URL || 'https://traineradda.com').replace(/\/$/, ''),
     ...extraTags,
   }
