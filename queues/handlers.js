@@ -4,7 +4,10 @@ import EmailLayout from '../models/EmailLayout.js'
 import Trainer from '../models/Trainer.js'
 import { getChannel } from '../services/messaging/channelRegistry.js'
 import { enqueueBatchJob } from './producers.js'
-import { finalizeCampaignIfDone } from '../services/messaging/campaignService.js'
+import {
+  ensureRecipientsPrepared,
+  finalizeCampaignIfDone,
+} from '../services/messaging/campaignService.js'
 
 function chunkArray(arr, size) {
   const chunks = []
@@ -24,14 +27,26 @@ export async function handleStartCampaign(job) {
   campaign.startedAt = new Date()
   await campaign.save()
 
+  const preparedCount = await ensureRecipientsPrepared(campaign)
+  if (preparedCount === 0) {
+    campaign.status = 'failed'
+    campaign.lastError = 'No eligible recipients when preparing send'
+    campaign.completedAt = new Date()
+    await campaign.save()
+    return
+  }
+
+  const activeCampaign = await Campaign.findById(campaignId)
+  if (!activeCampaign || activeCampaign.status === 'cancelled') return
+
   let anyBatches = false
 
-  for (const channelId of campaign.channels || []) {
+  for (const channelId of activeCampaign.channels || []) {
     const channel = getChannel(channelId)
     if (!channel.isConfigured) continue
 
     const pending = await CampaignRecipient.find({
-      campaignId: campaign._id,
+      campaignId: activeCampaign._id,
       channel: channelId,
       status: 'pending',
     }).select('_id').lean()
@@ -40,7 +55,7 @@ export async function handleStartCampaign(job) {
     const batches = chunkArray(ids, channel.batchSize)
     const totalBatches = batches.length
 
-    const stats = campaign.channelStats?.get?.(channelId) || {
+    const stats = activeCampaign.channelStats?.get?.(channelId) || {
       totalBatches: 0,
       completedBatches: 0,
       sentCount: 0,
@@ -48,8 +63,8 @@ export async function handleStartCampaign(job) {
     }
     stats.totalBatches = totalBatches
     stats.status = totalBatches > 0 ? 'processing' : 'completed'
-    campaign.channelStats.set(channelId, stats)
-    await campaign.save()
+    activeCampaign.channelStats.set(channelId, stats)
+    await activeCampaign.save()
 
     if (totalBatches === 0) continue
 

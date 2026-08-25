@@ -63,6 +63,43 @@ export async function sendTestEmail(campaign, testEmail, trainerId) {
   return { ok: true }
 }
 
+const RECIPIENT_INSERT_BATCH_SIZE = 500
+
+export async function insertRecipientsInBatches(recipients) {
+  for (let i = 0; i < recipients.length; i += RECIPIENT_INSERT_BATCH_SIZE) {
+    const chunk = recipients.slice(i, i + RECIPIENT_INSERT_BATCH_SIZE)
+    await CampaignRecipient.insertMany(chunk, { ordered: false })
+  }
+}
+
+/** Build and persist recipients in the worker so the HTTP send endpoint stays fast. */
+export async function ensureRecipientsPrepared(campaign) {
+  const existing = await CampaignRecipient.countDocuments({ campaignId: campaign._id })
+  if (existing > 0) return existing
+
+  const { recipients } = await buildRecipientsForCampaign(campaign)
+  if (!recipients.length) return 0
+
+  await insertRecipientsInBatches(recipients)
+
+  const channelStats =
+    campaign.channelStats instanceof Map
+      ? campaign.channelStats
+      : new Map(Object.entries(campaign.channelStats || {}))
+
+  for (const ch of campaign.channels || []) {
+    const count = recipients.filter((r) => r.channel === ch).length
+    const stats = channelStats.get(ch) || emptyChannelStats()
+    stats.totalRecipients = count
+    channelStats.set(ch, stats)
+  }
+
+  campaign.channelStats = channelStats
+  await campaign.save()
+
+  return recipients.length
+}
+
 export async function queueCampaignSend(campaignId) {
   const campaign = await Campaign.findById(campaignId)
   if (!campaign) throw new Error('Campaign not found')
@@ -80,20 +117,24 @@ export async function queueCampaignSend(campaignId) {
     if (errors.length) throw new Error(errors.join(', '))
   }
 
-  const { recipients } = await buildRecipientsForCampaign(campaign)
-  if (!recipients.length) throw new Error('No eligible recipients for this campaign')
+  const preview = await previewAudience(
+    { ...campaign.toObject(), channels: activeChannels },
+    activeChannels
+  )
+  const totalEligible = activeChannels.reduce(
+    (sum, ch) => sum + (preview.channels[ch]?.eligible || 0),
+    0
+  )
+  if (totalEligible === 0) throw new Error('No eligible recipients for this campaign')
 
   await CampaignRecipient.deleteMany({ campaignId: campaign._id })
 
   const channelStats = initChannelStatsMap(activeChannels)
   for (const ch of activeChannels) {
-    const count = recipients.filter((r) => r.channel === ch).length
     const stats = channelStats.get(ch)
-    stats.totalRecipients = count
+    stats.totalRecipients = preview.channels[ch]?.eligible || 0
     channelStats.set(ch, stats)
   }
-
-  await CampaignRecipient.insertMany(recipients, { ordered: false })
 
   campaign.channels = activeChannels
   campaign.channelStats = channelStats
@@ -102,7 +143,18 @@ export async function queueCampaignSend(campaignId) {
   campaign.completedAt = undefined
   campaign.lastError = ''
 
-  const job = await enqueueStartCampaign(campaign._id.toString())
+  let job
+  try {
+    job = await enqueueStartCampaign(campaign._id.toString())
+  } catch (err) {
+    console.error('Redis enqueue failed:', err)
+    campaign.status = 'draft'
+    await campaign.save()
+    throw new Error(
+      'Could not queue campaign for sending. Ensure Redis is running and REDIS_URL is set on both the API and worker services.'
+    )
+  }
+
   campaign.dispatchJobId = job.id || ''
   await campaign.save()
 

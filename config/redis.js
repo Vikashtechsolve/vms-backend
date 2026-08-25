@@ -8,6 +8,11 @@ export function createRedisConnection() {
   return new IORedis(url, {
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
+    connectTimeout: 10_000,
+    retryStrategy(times) {
+      if (times > 3) return null
+      return Math.min(times * 200, 2000)
+    },
   })
 }
 
