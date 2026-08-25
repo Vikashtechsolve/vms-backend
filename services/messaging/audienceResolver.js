@@ -16,24 +16,8 @@ function buildBaseTrainerFilter(campaign) {
     return filter
   }
 
-  const audienceFilter = { ...(campaign.audienceFilter || {}), source: 'admin' }
-  const base = buildTrainerQuery(audienceFilter)
-
-  if (campaign.selectionMode === 'all') {
-    return {
-      $and: [
-        {
-          $or: [
-            { source: 'admin' },
-            { source: { $exists: false } },
-            { source: null },
-          ],
-        },
-      ],
-    }
-  }
-
-  return base
+  const audienceFilter = { ...(campaign.audienceFilter || {}) }
+  return buildTrainerQuery(audienceFilter)
 }
 
 function isExcluded(trainer, excludedIds) {
@@ -48,9 +32,20 @@ export async function resolveBaseTrainers(campaign) {
   return trainers.filter((t) => !isExcluded(t, excludedIds))
 }
 
+function countBySource(trainers) {
+  let admin = 0
+  let website = 0
+  for (const trainer of trainers) {
+    if (trainer.source === 'website') website += 1
+    else admin += 1
+  }
+  return { admin, website }
+}
+
 export async function previewAudience(campaign, channelIds = null) {
   const ids = channelIds || campaign.channels || listActiveChannelIds()
   const trainers = await resolveBaseTrainers(campaign)
+  const sourceBreakdown = countBySource(trainers)
   const channels = {}
 
   for (const channelId of ids) {
@@ -77,6 +72,7 @@ export async function previewAudience(campaign, channelIds = null) {
 
   return {
     totalMatched: trainers.length,
+    sourceBreakdown,
     channels,
     sample: trainers.slice(0, 10).map((t) => ({
       id: t._id.toString(),
@@ -85,6 +81,7 @@ export async function previewAudience(campaign, channelIds = null) {
       contact: t.contact,
       city: t.city,
       state: t.state,
+      source: t.source === 'website' ? 'website' : 'admin',
     })),
   }
 }

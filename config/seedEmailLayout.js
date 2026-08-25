@@ -3,10 +3,11 @@ import EmailLayout from '../models/EmailLayout.js'
 export const DEFAULT_LOGO_URL =
   'https://res.cloudinary.com/dc4gqqd35/image/upload/w_350,f_auto,q_auto/v1787319069/traineradda_bfnnbn.jpg'
 
+export const SYSTEM_LAYOUT_SLUG = 'trainer-adda-standard'
+
 /**
  * Header opens the outer shell + white card and leaves the body <td> open.
  * Footer closes that <td>, adds sign-off + brand footer, then closes all tables.
- * Never close the main card in the header — bodyHtml is inserted between them.
  */
 const DEFAULT_HEADER = `
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:0;padding:0;background-color:#f4f5f7;">
@@ -111,29 +112,49 @@ const DEFAULT_FOOTER = `
 </table>
 `
 
+/**
+ * Creates the starter layout only when the database is completely empty.
+ * Never updates or deletes existing layouts. Runs on API only (not worker).
+ * Set SEED_EMAIL_LAYOUT=false to disable auto-seed entirely.
+ */
 export async function seedEmailLayout() {
-  const payload = {
-    name: 'Trainer Adda Standard',
-    headerHtml: DEFAULT_HEADER,
-    footerHtml: DEFAULT_FOOTER,
-    isDefault: true,
-    isActive: true,
-  }
-
-  const existingDefault = await EmailLayout.findOne({ isDefault: true })
-  if (existingDefault) {
-    existingDefault.name = payload.name
-    existingDefault.headerHtml = payload.headerHtml
-    existingDefault.footerHtml = payload.footerHtml
-    existingDefault.isActive = true
-    await existingDefault.save()
-    console.log('Default email layout updated')
-    return
-  }
+  if (process.env.SEED_EMAIL_LAYOUT === 'false') return
 
   const count = await EmailLayout.countDocuments()
   if (count > 0) return
 
-  await EmailLayout.create(payload)
-  console.log('Default email layout seeded')
+  await EmailLayout.create({
+    name: 'Trainer Adda Standard',
+    slug: SYSTEM_LAYOUT_SLUG,
+    headerHtml: DEFAULT_HEADER,
+    footerHtml: DEFAULT_FOOTER,
+    isDefault: true,
+    isActive: true,
+    isProtected: true,
+  })
+  console.log('Default email layout seeded (first run only)')
+}
+
+/** One-time safety: tag the starter layout so it cannot be deleted. */
+export async function protectSystemLayouts() {
+  await EmailLayout.updateMany(
+    { slug: SYSTEM_LAYOUT_SLUG },
+    { $set: { isProtected: true } }
+  )
+
+  const legacy = await EmailLayout.findOne({
+    name: 'Trainer Adda Standard',
+    $or: [{ slug: '' }, { slug: null }, { slug: { $exists: false } }],
+  })
+  if (!legacy) return
+
+  const slugTaken = await EmailLayout.findOne({
+    slug: SYSTEM_LAYOUT_SLUG,
+    _id: { $ne: legacy._id },
+  })
+  if (slugTaken) return
+
+  legacy.slug = SYSTEM_LAYOUT_SLUG
+  legacy.isProtected = true
+  await legacy.save()
 }

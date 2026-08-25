@@ -2,11 +2,9 @@ import 'dotenv/config'
 import { init } from './config/db.js'
 import { registerAllChannels } from './services/messaging/index.js'
 import { startDispatchWorker, startBatchWorkersForAllChannels, closeAllWorkers } from './queues/workers.js'
-import { seedEmailLayout } from './config/seedEmailLayout.js'
 
 async function main() {
   await init()
-  await seedEmailLayout()
   registerAllChannels()
 
   startDispatchWorker()
