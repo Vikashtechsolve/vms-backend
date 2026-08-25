@@ -20,6 +20,7 @@ import unsubscribeRoutes from './routes/unsubscribe.js'
 import { backfillTrainers } from './helpers/backfillTrainers.js'
 import { registerAllChannels } from './services/messaging/index.js'
 import { seedEmailLayout } from './config/seedEmailLayout.js'
+import { pingRedis } from './config/redis.js'
 
 const app = express()
 const PORT = process.env.PORT || 4000
@@ -42,8 +43,13 @@ app.use('/api/email-layouts', emailLayoutsRoutes)
 app.use('/api/campaigns', campaignsRoutes)
 app.use('/api/unsubscribe', unsubscribeRoutes)
 
-app.get('/api/health', (req, res) => {
-  res.json({ ok: true, message: 'Trainer Adda Backend running' })
+app.get('/api/health', async (req, res) => {
+  const redis = await pingRedis()
+  res.json({
+    ok: true,
+    message: 'Trainer Adda Backend running',
+    redis: redis ? 'connected' : 'disconnected',
+  })
 })
 
 app.use((err, req, res, next) => {
