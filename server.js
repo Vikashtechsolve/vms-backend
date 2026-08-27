@@ -15,11 +15,13 @@ import activitiesRoutes from './routes/activities.js'
 import contactRoutes from './routes/contact.js'
 import locationsRoutes from './routes/locations.js'
 import emailLayoutsRoutes from './routes/emailLayouts.js'
+import trainerTagsRoutes from './routes/trainerTags.js'
 import campaignsRoutes from './routes/campaigns.js'
 import unsubscribeRoutes from './routes/unsubscribe.js'
 import { backfillTrainers } from './helpers/backfillTrainers.js'
 import { registerAllChannels } from './services/messaging/index.js'
 import { seedEmailLayout, protectSystemLayouts } from './config/seedEmailLayout.js'
+import { seedTrainerTags } from './helpers/trainerTagService.js'
 import { pingRedis } from './config/redis.js'
 
 const app = express()
@@ -40,6 +42,7 @@ app.use('/api/activities', activitiesRoutes)
 app.use('/api/contact', contactRoutes)
 app.use('/api/locations', locationsRoutes)
 app.use('/api/email-layouts', emailLayoutsRoutes)
+app.use('/api/trainer-tags', trainerTagsRoutes)
 app.use('/api/campaigns', campaignsRoutes)
 app.use('/api/unsubscribe', unsubscribeRoutes)
 
@@ -62,6 +65,7 @@ async function start() {
   registerAllChannels()
   await seedEmailLayout()
   await protectSystemLayouts()
+  await seedTrainerTags()
   // Older trainer records predate the derived filter fields; this is a no-op once done.
   await backfillTrainers().catch((err) => console.error('Trainer backfill skipped:', err.message))
   app.listen(PORT, () => {

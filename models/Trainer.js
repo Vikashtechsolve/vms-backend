@@ -48,6 +48,10 @@ const trainerSchema = new mongoose.Schema(
     modes: { type: [String], default: [] },
     qualificationTag: { type: String, default: '' },
 
+    /** Admin-assigned catalog tags (e.g. AIML, MERN Stack). Not set from website registration. */
+    tags: { type: [String], default: [] },
+    tagSlugs: { type: [String], default: [], index: true },
+
     emailOptIn: { type: Boolean, default: true },
     whatsappOptIn: { type: Boolean, default: false },
     smsOptIn: { type: Boolean, default: false },
@@ -83,6 +87,7 @@ trainerSchema.index(
 )
 trainerSchema.index({ city: 1, state: 1 })
 trainerSchema.index({ skillTags: 1 })
+trainerSchema.index({ tagSlugs: 1 })
 trainerSchema.index({ qualificationTag: 1 })
 trainerSchema.index({ workTypes: 1 })
 trainerSchema.index({ modes: 1 })

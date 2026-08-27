@@ -1,4 +1,5 @@
 import { skillTag, qualificationTag } from './trainerFacets.js'
+import TrainerTag from '../models/TrainerTag.js'
 
 const MAX_LIMIT = 100
 const DEFAULT_LIMIT = 20
@@ -47,6 +48,7 @@ export function buildTrainerQuery(query = {}) {
       $or: [
         { name: rx }, { email: rx }, { contact: rx }, { location: rx },
         { city: rx }, { state: rx }, { subject: rx }, { qualification: rx },
+        { tags: rx },
       ],
     })
   }
@@ -60,6 +62,11 @@ export function buildTrainerQuery(query = {}) {
   const skills = toList(query.skills).map(skillTag).filter(Boolean)
   if (skills.length) {
     filter.skillTags = query.skillsMatch === 'all' ? { $all: skills } : { $in: skills }
+  }
+
+  const tags = toList(query.tags).map((t) => String(t).trim()).filter(Boolean)
+  if (tags.length) {
+    filter.tagSlugs = query.tagsMatch === 'all' ? { $all: tags } : { $in: tags }
   }
 
   const qualifications = toList(query.qualifications).map(qualificationTag).filter(Boolean)
@@ -170,7 +177,7 @@ function sourceMatch(query = {}) {
 /** Facet lists for the filter panel, built from the trainers that actually exist. */
 export async function getTrainerFilterOptions(Trainer, query = {}) {
   const match = sourceMatch(query)
-  const [skillRows, qualificationRows, locationRows, stats] = await Promise.all([
+  const [skillRows, qualificationRows, locationRows, stats, tagDocs] = await Promise.all([
     Trainer.aggregate([
       ...(Object.keys(match).length ? [{ $match: match }] : []),
       { $unwind: '$skills' },
@@ -198,10 +205,16 @@ export async function getTrainerFilterOptions(Trainer, query = {}) {
         },
       },
     ]),
+    TrainerTag.find().sort({ name: 1 }).lean(),
   ])
 
   return {
     skills: mergeByTag(skillRows, skillTag),
+    tags: tagDocs.map((t) => ({
+      value: t.slug,
+      label: t.name,
+      count: t.trainerCount || 0,
+    })),
     qualifications: mergeByTag(qualificationRows, qualificationTag),
     cities: locationRows.map((r) => ({
       value: r._id.city,

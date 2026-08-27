@@ -19,6 +19,8 @@ import {
   buildTrainerSort,
   getTrainerFilterOptions,
 } from '../helpers/trainerQuery.js'
+import { applyTrainerTags, syncTrainerTagCounts } from '../helpers/trainerTagService.js'
+import { toSlugList } from '../helpers/trainerTagUtils.js'
 
 const router = Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }) // 5MB per file
@@ -71,6 +73,31 @@ async function uploadResumeToCloudinary(buffer, originalName = 'resume') {
   })
 }
 
+/** Parse tagSlugs from JSON string (FormData) or array. Website registration must not set tags. */
+function parseTagSlugsInput(b, allowTags) {
+  if (!allowTags) return undefined
+  if (b.tagSlugs == null) return undefined
+  if (Array.isArray(b.tagSlugs)) return b.tagSlugs
+  if (typeof b.tagSlugs === 'string') {
+    const trimmed = b.tagSlugs.trim()
+    if (!trimmed) return []
+    try {
+      const parsed = JSON.parse(trimmed)
+      return Array.isArray(parsed) ? parsed : toSlugList(trimmed)
+    } catch {
+      return toSlugList(trimmed)
+    }
+  }
+  return []
+}
+
+async function saveTrainerTags(trainer, tagSlugsInput, previousSlugs = []) {
+  if (tagSlugsInput === undefined) return
+  await applyTrainerTags(trainer, tagSlugsInput)
+  const affected = [...new Set([...(previousSlugs || []), ...(trainer.tagSlugs || [])])]
+  await syncTrainerTagCounts(affected)
+}
+
 /** Multer can put `{}` on file field names in req.body; only accept real strings. */
 function bodyString(value, fallback = '') {
   return typeof value === 'string' ? value : fallback
@@ -113,6 +140,8 @@ router.post('/register', uploadFields, async (req, res) => {
       photo,
       resume,
       source: 'website',
+      tags: [],
+      tagSlugs: [],
     })
     res.status(201).json(trainer.toJSON())
   } catch (err) {
@@ -237,7 +266,11 @@ router.post('/', uploadFields, async (req, res) => {
       resume,
       comments: comments ?? [],
       source: 'admin',
+      tags: [],
+      tagSlugs: [],
     })
+    await saveTrainerTags(trainer, parseTagSlugsInput(b, true))
+    await trainer.save()
     const out = trainer.toJSON()
     await logActivity(`New trainer profile added: ${out.name}`, 'Just now')
     res.status(201).json(out)
@@ -312,6 +345,7 @@ router.put('/:id', uploadFields, async (req, res) => {
         return res.status(502).json({ error: 'Resume upload failed. Cloudinary is not configured.' })
       }
     }
+    const previousTagSlugs = [...(existing.tagSlugs || [])]
     existing.name = validated.name
     existing.email = validated.email
     existing.contact = validated.contact
@@ -335,6 +369,7 @@ router.put('/:id', uploadFields, async (req, res) => {
     existing.additionalDetails = optional.additionalDetails
     existing.resume = resume
     if (comments !== undefined) existing.comments = comments
+    await saveTrainerTags(existing, parseTagSlugsInput(b, true), previousTagSlugs)
     await existing.save()
     const out = existing.toJSON()
     await logActivity(`Trainer profile updated: ${out.name}`, 'Just now')
@@ -373,8 +408,11 @@ router.post('/:id/shift-to-record', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    const trainer = await Trainer.findByIdAndDelete(req.params.id)
+    const trainer = await Trainer.findById(req.params.id)
     if (!trainer) return res.status(404).json({ error: 'Trainer not found' })
+    const previousTagSlugs = [...(trainer.tagSlugs || [])]
+    await trainer.deleteOne()
+    await syncTrainerTagCounts(previousTagSlugs)
     res.status(204).send()
   } catch (err) {
     if (err.name === 'CastError') return res.status(404).json({ error: 'Trainer not found' })
