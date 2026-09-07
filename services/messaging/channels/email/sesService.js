@@ -45,6 +45,12 @@ export async function sendEmail({ to, subject, html, text }) {
     },
   })
 
-  const response = await getClient().send(command)
-  return { providerMessageId: response.MessageId || '' }
+  try {
+    const response = await getClient().send(command)
+    return { providerMessageId: response.MessageId || '' }
+  } catch (err) {
+    const code = err.name || err.Code || 'SESError'
+    const message = err.message || 'Send failed'
+    throw new Error(`${code}: ${message}`)
+  }
 }

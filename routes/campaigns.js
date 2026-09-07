@@ -10,6 +10,7 @@ import {
   queueCampaignSend,
   cancelCampaign,
 } from '../services/messaging/campaignService.js'
+import { refreshCampaignStatusFromRecipients } from '../services/messaging/campaignStats.js'
 
 const router = Router()
 
@@ -49,6 +50,13 @@ router.get('/:id', async (req, res) => {
   try {
     const campaign = await Campaign.findById(req.params.id)
     if (!campaign) return res.status(404).json({ error: 'Campaign not found' })
+
+    if (['queued', 'processing', 'completed', 'failed'].includes(campaign.status)) {
+      await refreshCampaignStatusFromRecipients(campaign._id)
+      const refreshed = await Campaign.findById(req.params.id)
+      return res.json(campaignPayload(refreshed))
+    }
+
     res.json(campaignPayload(campaign))
   } catch (err) {
     if (err.name === 'CastError') return res.status(404).json({ error: 'Campaign not found' })

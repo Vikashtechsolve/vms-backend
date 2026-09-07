@@ -10,6 +10,7 @@ const channelStatsSchema = new mongoose.Schema(
     totalRecipients: { type: Number, default: 0 },
     totalBatches: { type: Number, default: 0 },
     completedBatches: { type: Number, default: 0 },
+    completedBatchIndices: { type: [Number], default: [] },
     sentCount: { type: Number, default: 0 },
     failedCount: { type: Number, default: 0 },
     skippedCount: { type: Number, default: 0 },

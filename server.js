@@ -18,6 +18,7 @@ import emailLayoutsRoutes from './routes/emailLayouts.js'
 import trainerTagsRoutes from './routes/trainerTags.js'
 import campaignsRoutes from './routes/campaigns.js'
 import unsubscribeRoutes from './routes/unsubscribe.js'
+import sesWebhookRoutes from './routes/sesWebhook.js'
 import { backfillTrainers } from './helpers/backfillTrainers.js'
 import { registerAllChannels } from './services/messaging/index.js'
 import { seedEmailLayout, protectSystemLayouts } from './config/seedEmailLayout.js'
@@ -29,6 +30,7 @@ const PORT = process.env.PORT || 4000
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 app.use(cors(createCorsOptions()))
+app.use('/api/webhooks/ses', express.text({ type: '*/*' }), sesWebhookRoutes)
 app.use(express.json({ limit: '10mb' }))
 app.use('/public', express.static(path.join(__dirname, 'public')))
 

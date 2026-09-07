@@ -8,18 +8,10 @@ import { previewAudience, buildRecipientsForCampaign } from './audienceResolver.
 import { assembleEmailHtml } from './channels/email/emailAssembler.js'
 import { enqueueStartCampaign, removeCampaignJobs } from '../../queues/producers.js'
 import { CHANNEL_IDS } from './types.js'
-
-function emptyChannelStats() {
-  return {
-    status: 'pending',
-    totalRecipients: 0,
-    totalBatches: 0,
-    completedBatches: 0,
-    sentCount: 0,
-    failedCount: 0,
-    skippedCount: 0,
-  }
-}
+import {
+  emptyChannelStats,
+  refreshCampaignStatusFromRecipients,
+} from './campaignStats.js'
 
 function initChannelStatsMap(channels) {
   const map = new Map()
@@ -182,24 +174,18 @@ export async function cancelCampaign(campaignId) {
 }
 
 export async function finalizeCampaignIfDone(campaignId) {
-  const campaign = await Campaign.findById(campaignId)
-  if (!campaign || campaign.status === 'cancelled') return
+  const before = await Campaign.findById(campaignId).select('status subject')
+  if (!before || before.status === 'cancelled') return
 
-  const statsObj = campaign.channelStats instanceof Map
-    ? Object.fromEntries(campaign.channelStats)
-    : campaign.channelStats || {}
+  const campaign = await refreshCampaignStatusFromRecipients(campaignId)
+  if (!campaign) return
 
-  const allDone = Object.values(statsObj).every(
-    (s) => (s.completedBatches || 0) >= (s.totalBatches || 0)
-  )
+  const finished = campaign.status === 'completed' || campaign.status === 'failed'
+  const wasFinished = before.status === 'completed' || before.status === 'failed'
 
-  if (!allDone) return
-
-  const hasFailures = Object.values(statsObj).some((s) => s.failedCount > 0)
-  campaign.status = hasFailures ? 'failed' : 'completed'
-  campaign.completedAt = new Date()
-  await campaign.save()
-  await logActivity(`Campaign "${campaign.subject}" sent (${campaign.status})`)
+  if (finished && !wasFinished) {
+    await logActivity(`Campaign "${campaign.subject}" sent (${campaign.status})`)
+  }
 }
 
 export { previewAudience }

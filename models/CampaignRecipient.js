@@ -22,6 +22,7 @@ const campaignRecipientSchema = new mongoose.Schema(
 
 campaignRecipientSchema.index({ campaignId: 1, status: 1 })
 campaignRecipientSchema.index({ campaignId: 1, trainerId: 1, channel: 1 }, { unique: true })
+campaignRecipientSchema.index({ providerMessageId: 1 }, { sparse: true })
 
 campaignRecipientSchema.set('toJSON', {
   transform: (doc, ret) => {

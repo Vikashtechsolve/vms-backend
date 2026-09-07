@@ -8,6 +8,10 @@ import {
   ensureRecipientsPrepared,
   finalizeCampaignIfDone,
 } from '../services/messaging/campaignService.js'
+import {
+  emptyChannelStats,
+  markBatchComplete,
+} from '../services/messaging/campaignStats.js'
 
 function chunkArray(arr, size) {
   const chunks = []
@@ -55,13 +59,10 @@ export async function handleStartCampaign(job) {
     const batches = chunkArray(ids, channel.batchSize)
     const totalBatches = batches.length
 
-    const stats = activeCampaign.channelStats?.get?.(channelId) || {
-      totalBatches: 0,
-      completedBatches: 0,
-      sentCount: 0,
-      failedCount: 0,
-    }
+    const stats = activeCampaign.channelStats?.get?.(channelId) || emptyChannelStats()
     stats.totalBatches = totalBatches
+    stats.completedBatches = 0
+    stats.completedBatchIndices = []
     stats.status = totalBatches > 0 ? 'processing' : 'completed'
     activeCampaign.channelStats.set(channelId, stats)
     await activeCampaign.save()
@@ -102,9 +103,6 @@ export async function handleSendBatch(job) {
     status: 'pending',
   }).lean()
 
-  let sent = 0
-  let failed = 0
-
   for (const recipient of recipients) {
     const freshCampaign = await Campaign.findById(campaignId).select('status').lean()
     if (!freshCampaign || freshCampaign.status === 'cancelled') return
@@ -116,7 +114,6 @@ export async function handleSendBatch(job) {
         errorMessage: 'Trainer not found',
         batchIndex,
       })
-      failed += 1
       continue
     }
 
@@ -130,7 +127,6 @@ export async function handleSendBatch(job) {
           errorMessage: result.error,
           batchIndex,
         })
-        failed += 1
       } else {
         await CampaignRecipient.findByIdAndUpdate(recipient._id, {
           status: 'sent',
@@ -138,42 +134,25 @@ export async function handleSendBatch(job) {
           sentAt: new Date(),
           batchIndex,
         })
-        sent += 1
       }
     } catch (err) {
+      const errorMessage = err.message || 'Send failed'
       await CampaignRecipient.findByIdAndUpdate(recipient._id, {
         status: 'failed',
-        errorMessage: err.message || 'Send failed',
+        errorMessage,
         batchIndex,
       })
-      failed += 1
     }
   }
 
-  const incPath = `channelStats.${channelId}`
-  await Campaign.updateOne(
-    { _id: campaignId },
-    {
-      $inc: {
-        [`${incPath}.sentCount`]: sent,
-        [`${incPath}.failedCount`]: failed,
-        [`${incPath}.completedBatches`]: 1,
-      },
-    }
-  )
-
-  const updated = await Campaign.findById(campaignId)
-  if (!updated) return
-
-  const stats = updated.channelStats?.get?.(channelId) || updated.channelStats?.[channelId]
-  if (stats && stats.completedBatches >= totalBatches) {
-    const channelStatus = stats.failedCount > 0 ? 'failed' : 'completed'
-    if (updated.channelStats instanceof Map) {
-      const next = { ...stats, status: channelStatus }
-      updated.channelStats.set(channelId, next)
-    }
-    await updated.save()
+  // Any still-pending rows in this batch did not get a send attempt.
+  if (recipientIds.length > 0) {
+    await CampaignRecipient.updateMany(
+      { _id: { $in: recipientIds }, status: 'pending' },
+      { $set: { status: 'failed', errorMessage: 'Send did not complete', batchIndex } }
+    )
   }
 
+  await markBatchComplete(campaignId, channelId, batchIndex, totalBatches)
   await finalizeCampaignIfDone(campaignId)
 }
