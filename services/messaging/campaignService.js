@@ -6,7 +6,9 @@ import { logActivity } from '../../helpers/activities.js'
 import { getChannel } from './channelRegistry.js'
 import { previewAudience, buildRecipientsForCampaign } from './audienceResolver.js'
 import { assembleEmailHtml } from './channels/email/emailAssembler.js'
+import { previewWhatsAppMessage, loadWhatsAppTemplate } from './channels/whatsapp/whatsappChannel.js'
 import { enqueueStartCampaign, removeCampaignJobs } from '../../queues/producers.js'
+import { normalizeWhatsAppPhone } from '../../helpers/phoneUtils.js'
 import { CHANNEL_IDS } from './types.js'
 import {
   emptyChannelStats,
@@ -21,13 +23,45 @@ function initChannelStatsMap(channels) {
   return map
 }
 
-export async function previewCampaignMessage(campaign, trainerId) {
+export async function previewCampaignMessage(campaign, trainerId, channelId = CHANNEL_IDS.EMAIL) {
   const trainer = await Trainer.findById(trainerId).lean()
   if (!trainer) throw new Error('Trainer not found')
+
+  if (channelId === CHANNEL_IDS.WHATSAPP) {
+    const template = await loadWhatsAppTemplate(campaign)
+    if (!template) throw new Error('WhatsApp template not found')
+    return previewWhatsAppMessage(campaign, trainer, template)
+  }
 
   const layoutId = campaign.layoutId?._id || campaign.layoutId
   const layout = layoutId ? await EmailLayout.findById(layoutId).lean() : null
   return assembleEmailHtml({ layout, campaign, trainer })
+}
+
+export async function sendTestWhatsApp(campaign, testPhone, trainerId) {
+  const channel = getChannel(CHANNEL_IDS.WHATSAPP)
+  const errors = await channel.validateCampaign(campaign)
+  if (errors.length) throw new Error(errors.join(', '))
+
+  let trainer
+  if (trainerId) {
+    trainer = await Trainer.findById(trainerId).lean()
+  } else {
+    trainer = {
+      name: 'Test Trainer',
+      contact: testPhone,
+      contactNormalized: testPhone.replace(/\D/g, ''),
+      subject: 'Java, React',
+      whatsappOptIn: true,
+    }
+  }
+
+  const message = await channel.buildMessage(campaign, trainer)
+  const phone = normalizeWhatsAppPhone(trainer) || normalizeWhatsAppPhone({ contact: testPhone })
+  if (!phone) throw new Error('Enter a valid phone number with country code (e.g. 9876543210)')
+  const result = await channel.send({ address: phone, message })
+  if (result.error) throw new Error(result.error)
+  return { ok: true }
 }
 
 export async function sendTestEmail(campaign, testEmail, trainerId) {
@@ -79,10 +113,15 @@ export async function ensureRecipientsPrepared(campaign) {
       ? campaign.channelStats
       : new Map(Object.entries(campaign.channelStats || {}))
 
+  const countByChannel = await CampaignRecipient.aggregate([
+    { $match: { campaignId: campaign._id } },
+    { $group: { _id: '$channel', count: { $sum: 1 } } },
+  ])
+  const countMap = new Map(countByChannel.map((r) => [r._id, r.count]))
+
   for (const ch of campaign.channels || []) {
-    const count = recipients.filter((r) => r.channel === ch).length
     const stats = channelStats.get(ch) || emptyChannelStats()
-    stats.totalRecipients = count
+    stats.totalRecipients = countMap.get(ch) || 0
     channelStats.set(ch, stats)
   }
 
@@ -105,7 +144,7 @@ export async function queueCampaignSend(campaignId) {
   if (!activeChannels.length) throw new Error('No configured messaging channels')
 
   for (const channelId of activeChannels) {
-    const errors = getChannel(channelId).validateCampaign(campaign)
+    const errors = await getChannel(channelId).validateCampaign(campaign)
     if (errors.length) throw new Error(errors.join(', '))
   }
 
@@ -184,7 +223,8 @@ export async function finalizeCampaignIfDone(campaignId) {
   const wasFinished = before.status === 'completed' || before.status === 'failed'
 
   if (finished && !wasFinished) {
-    await logActivity(`Campaign "${campaign.subject}" sent (${campaign.status})`)
+    const label = campaign.subject?.trim() || 'Campaign'
+    await logActivity(`Campaign "${label}" sent (${campaign.status})`)
   }
 }
 

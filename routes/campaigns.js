@@ -7,6 +7,7 @@ import {
   previewAudience,
   previewCampaignMessage,
   sendTestEmail,
+  sendTestWhatsApp,
   queueCampaignSend,
   cancelCampaign,
 } from '../services/messaging/campaignService.js'
@@ -73,6 +74,8 @@ router.post('/', async (req, res) => {
       subject: body.subject || '',
       bodyHtml: body.bodyHtml || '',
       layoutId: body.layoutId || undefined,
+      whatsappTemplateId: body.whatsappTemplateId || undefined,
+      whatsappBodyText: body.whatsappBodyText || '',
       selectionMode: body.selectionMode || 'filter',
       audienceFilter: body.audienceFilter || {},
       selectedTrainerIds: body.selectedTrainerIds || [],
@@ -99,6 +102,8 @@ router.put('/:id', async (req, res) => {
     if (body.subject != null) campaign.subject = body.subject
     if (body.bodyHtml != null) campaign.bodyHtml = body.bodyHtml
     if (body.layoutId != null) campaign.layoutId = body.layoutId || undefined
+    if (body.whatsappTemplateId != null) campaign.whatsappTemplateId = body.whatsappTemplateId || undefined
+    if (body.whatsappBodyText != null) campaign.whatsappBodyText = body.whatsappBodyText
     if (body.selectionMode != null) campaign.selectionMode = body.selectionMode
     if (body.audienceFilter != null) campaign.audienceFilter = body.audienceFilter
     if (body.selectedTrainerIds != null) campaign.selectedTrainerIds = body.selectedTrainerIds
@@ -151,16 +156,16 @@ router.post('/audience/preview', async (req, res) => {
 
 router.post('/preview', async (req, res) => {
   try {
-    const { campaignId, trainerId, subject, bodyHtml, layoutId } = req.body || {}
+    const { campaignId, trainerId, subject, bodyHtml, layoutId, channel, whatsappTemplateId } = req.body || {}
     let campaign
     if (campaignId) {
       campaign = await Campaign.findById(campaignId)
       if (!campaign) return res.status(404).json({ error: 'Campaign not found' })
     } else {
-      campaign = { subject, bodyHtml, layoutId }
+      campaign = { subject, bodyHtml, layoutId, whatsappTemplateId }
     }
     if (!trainerId) return res.status(400).json({ error: 'trainerId is required' })
-    const preview = await previewCampaignMessage(campaign, trainerId)
+    const preview = await previewCampaignMessage(campaign, trainerId, channel || 'email')
     res.json(preview)
   } catch (err) {
     console.error(err)
@@ -170,8 +175,8 @@ router.post('/preview', async (req, res) => {
 
 router.post('/test-send', async (req, res) => {
   try {
-    const { campaignId, testEmail, trainerId } = req.body || {}
-    if (!testEmail?.trim()) return res.status(400).json({ error: 'testEmail is required' })
+    const { campaignId, testEmail, testPhone, trainerId, channel } = req.body || {}
+    const channelId = channel || 'email'
 
     let campaign
     if (campaignId) {
@@ -181,7 +186,14 @@ router.post('/test-send', async (req, res) => {
       return res.status(400).json({ error: 'campaignId is required' })
     }
 
-    await sendTestEmail(campaign, testEmail.trim(), trainerId)
+    if (channelId === 'whatsapp') {
+      if (!testPhone?.trim()) return res.status(400).json({ error: 'testPhone is required' })
+      await sendTestWhatsApp(campaign, testPhone.trim(), trainerId)
+    } else {
+      if (!testEmail?.trim()) return res.status(400).json({ error: 'testEmail is required' })
+      await sendTestEmail(campaign, testEmail.trim(), trainerId)
+    }
+
     res.json({ ok: true })
   } catch (err) {
     console.error(err)
@@ -224,7 +236,7 @@ router.get('/:id/recipients', async (req, res) => {
     ])
 
     const trainerIds = recipients.map((r) => r.trainerId)
-    const trainers = await Trainer.find({ _id: { $in: trainerIds } }).select('name email').lean()
+    const trainers = await Trainer.find({ _id: { $in: trainerIds } }).select('name email contact').lean()
     const trainerMap = new Map(trainers.map((t) => [t._id.toString(), t]))
 
     res.json({
@@ -233,6 +245,7 @@ router.get('/:id/recipients', async (req, res) => {
         const trainer = trainerMap.get(r.trainerId.toString())
         json.trainerName = trainer?.name || ''
         json.trainerEmail = trainer?.email || ''
+        json.trainerContact = trainer?.contact || ''
         return json
       }),
       total,
@@ -256,6 +269,8 @@ router.post('/:id/duplicate', async (req, res) => {
       subject: source.subject,
       bodyHtml: source.bodyHtml,
       layoutId: source.layoutId,
+      whatsappTemplateId: source.whatsappTemplateId,
+      whatsappBodyText: source.whatsappBodyText,
       selectionMode: source.selectionMode,
       audienceFilter: source.audienceFilter,
       selectedTrainerIds: source.selectedTrainerIds,

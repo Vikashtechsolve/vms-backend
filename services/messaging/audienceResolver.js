@@ -2,6 +2,10 @@ import Trainer from '../../models/Trainer.js'
 import { buildTrainerQuery } from '../../helpers/trainerQuery.js'
 import { getChannel, listActiveChannelIds } from './channelRegistry.js'
 
+/** Lean projection — only fields needed for eligibility checks (keeps 10k audience scans fast). */
+const AUDIENCE_SELECT =
+  'name email contact contactNormalized whatsappOptIn whatsappOptUnsubscribedAt unsubscribedAt emailOptIn source city state subject skills'
+
 function toObjectIdStrings(ids = []) {
   return ids.map((id) => String(id))
 }
@@ -20,16 +24,12 @@ function buildBaseTrainerFilter(campaign) {
   return buildTrainerQuery(audienceFilter)
 }
 
-function isExcluded(trainer, excludedIds) {
-  const id = trainer._id?.toString()
-  return excludedIds.includes(id)
-}
-
 export async function resolveBaseTrainers(campaign) {
   const filter = buildBaseTrainerFilter(campaign)
-  const excludedIds = toObjectIdStrings(campaign.excludedTrainerIds || [])
-  const trainers = await Trainer.find(filter).lean()
-  return trainers.filter((t) => !isExcluded(t, excludedIds))
+  const excludedSet = new Set(toObjectIdStrings(campaign.excludedTrainerIds || []))
+  const trainers = await Trainer.find(filter).select(AUDIENCE_SELECT).lean()
+  if (!excludedSet.size) return trainers
+  return trainers.filter((t) => !excludedSet.has(t._id.toString()))
 }
 
 function countBySource(trainers) {
@@ -42,6 +42,28 @@ function countBySource(trainers) {
   return { admin, website }
 }
 
+function summarizeChannelEligibility(trainers, channelId) {
+  const channel = getChannel(channelId)
+  let eligible = 0
+  const skipReasons = {}
+
+  for (const trainer of trainers) {
+    const result = channel.isTrainerEligible(trainer)
+    if (result.eligible) {
+      eligible += 1
+    } else {
+      const reason = result.skipReason || 'ineligible'
+      skipReasons[reason] = (skipReasons[reason] || 0) + 1
+    }
+  }
+
+  return {
+    eligible,
+    skipped: trainers.length - eligible,
+    skipReasons,
+  }
+}
+
 export async function previewAudience(campaign, channelIds = null) {
   const ids = channelIds || campaign.channels || listActiveChannelIds()
   const trainers = await resolveBaseTrainers(campaign)
@@ -49,25 +71,7 @@ export async function previewAudience(campaign, channelIds = null) {
   const channels = {}
 
   for (const channelId of ids) {
-    const channel = getChannel(channelId)
-    let eligible = 0
-    const skipReasons = {}
-
-    for (const trainer of trainers) {
-      const result = channel.isTrainerEligible(trainer)
-      if (result.eligible) {
-        eligible += 1
-      } else {
-        const reason = result.skipReason || 'ineligible'
-        skipReasons[reason] = (skipReasons[reason] || 0) + 1
-      }
-    }
-
-    channels[channelId] = {
-      eligible,
-      skipped: trainers.length - eligible,
-      skipReasons,
-    }
+    channels[channelId] = summarizeChannelEligibility(trainers, channelId)
   }
 
   return {
@@ -79,6 +83,7 @@ export async function previewAudience(campaign, channelIds = null) {
       name: t.name,
       email: t.email,
       contact: t.contact,
+      whatsappOptIn: t.whatsappOptIn === true,
       city: t.city,
       state: t.state,
       source: t.source === 'website' ? 'website' : 'admin',

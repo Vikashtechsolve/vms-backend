@@ -5,6 +5,8 @@ export const MERGE_TAGS = [
   'city',
   'state',
   'skills',
+  'requirementTitle',
+  'requirementBody',
   'unsubscribeUrl',
   'logoUrl',
   'siteUrl',

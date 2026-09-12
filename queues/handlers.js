@@ -3,6 +3,8 @@ import CampaignRecipient from '../models/CampaignRecipient.js'
 import EmailLayout from '../models/EmailLayout.js'
 import Trainer from '../models/Trainer.js'
 import { getChannel } from '../services/messaging/channelRegistry.js'
+import { loadWhatsAppTemplate } from '../services/messaging/channels/whatsapp/whatsappChannel.js'
+import { buildWhatsAppMessageFromTemplate } from '../services/messaging/channels/whatsapp/whatsappAssembler.js'
 import { enqueueBatchJob } from './producers.js'
 import {
   ensureRecipientsPrepared,
@@ -13,12 +15,22 @@ import {
   markBatchComplete,
 } from '../services/messaging/campaignStats.js'
 
+const ENQUEUE_CONCURRENCY = 25
+const CANCEL_CHECK_INTERVAL = 10
+
 function chunkArray(arr, size) {
   const chunks = []
   for (let i = 0; i < arr.length; i += size) {
     chunks.push(arr.slice(i, i + size))
   }
   return chunks
+}
+
+async function enqueueBatchesParallel(channel, jobs) {
+  for (let i = 0; i < jobs.length; i += ENQUEUE_CONCURRENCY) {
+    const slice = jobs.slice(i, i + ENQUEUE_CONCURRENCY)
+    await Promise.all(slice.map((payload) => enqueueBatchJob(channel, payload)))
+  }
 }
 
 export async function handleStartCampaign(job) {
@@ -53,7 +65,9 @@ export async function handleStartCampaign(job) {
       campaignId: activeCampaign._id,
       channel: channelId,
       status: 'pending',
-    }).select('_id').lean()
+    })
+      .select('_id')
+      .lean()
 
     const ids = pending.map((r) => r._id.toString())
     const batches = chunkArray(ids, channel.batchSize)
@@ -65,21 +79,21 @@ export async function handleStartCampaign(job) {
     stats.completedBatchIndices = []
     stats.status = totalBatches > 0 ? 'processing' : 'completed'
     activeCampaign.channelStats.set(channelId, stats)
-    await activeCampaign.save()
 
     if (totalBatches === 0) continue
 
     anyBatches = true
-    for (let i = 0; i < batches.length; i++) {
-      await enqueueBatchJob(channel, {
-        channelId,
-        campaignId,
-        recipientIds: batches[i],
-        batchIndex: i + 1,
-        totalBatches,
-      })
-    }
+    const jobs = batches.map((recipientIds, i) => ({
+      channelId,
+      campaignId,
+      recipientIds,
+      batchIndex: i + 1,
+      totalBatches,
+    }))
+    await enqueueBatchesParallel(channel, jobs)
   }
+
+  await activeCampaign.save()
 
   if (!anyBatches) {
     await finalizeCampaignIfDone(campaignId)
@@ -89,69 +103,114 @@ export async function handleStartCampaign(job) {
 export async function handleSendBatch(job) {
   const { channelId, campaignId, recipientIds, batchIndex, totalBatches } = job.data
 
-  const campaign = await Campaign.findById(campaignId)
+  const campaign = await Campaign.findById(campaignId).lean()
   if (!campaign || campaign.status === 'cancelled') return
 
   const channel = getChannel(channelId)
-  const layout =
-    channelId === 'email' && campaign.layoutId
-      ? await EmailLayout.findById(campaign.layoutId).lean()
-      : null
+
+  let layout = null
+  let waTemplate = null
+  if (channelId === 'email' && campaign.layoutId) {
+    layout = await EmailLayout.findById(campaign.layoutId).lean()
+  } else if (channelId === 'whatsapp' && campaign.whatsappTemplateId) {
+    waTemplate = await loadWhatsAppTemplate(campaign)
+  }
 
   const recipients = await CampaignRecipient.find({
     _id: { $in: recipientIds },
     status: 'pending',
   }).lean()
 
-  for (const recipient of recipients) {
-    const freshCampaign = await Campaign.findById(campaignId).select('status').lean()
-    if (!freshCampaign || freshCampaign.status === 'cancelled') return
+  if (!recipients.length) {
+    await markBatchComplete(campaignId, channelId, batchIndex, totalBatches)
+    await finalizeCampaignIfDone(campaignId)
+    return
+  }
 
-    const trainer = await Trainer.findById(recipient.trainerId).lean()
+  const trainerIds = recipients.map((r) => r.trainerId)
+  const trainers = await Trainer.find({ _id: { $in: trainerIds } }).lean()
+  const trainerMap = new Map(trainers.map((t) => [t._id.toString(), t]))
+
+  const bulkOps = []
+  let cancelled = false
+  let processed = 0
+
+  for (const recipient of recipients) {
+    processed += 1
+    if (processed % CANCEL_CHECK_INTERVAL === 1) {
+      const fresh = await Campaign.findById(campaignId).select('status').lean()
+      if (!fresh || fresh.status === 'cancelled') {
+        cancelled = true
+        break
+      }
+    }
+
+    const trainer = trainerMap.get(recipient.trainerId.toString())
     if (!trainer) {
-      await CampaignRecipient.findByIdAndUpdate(recipient._id, {
-        status: 'failed',
-        errorMessage: 'Trainer not found',
-        batchIndex,
+      bulkOps.push({
+        updateOne: {
+          filter: { _id: recipient._id, status: 'pending' },
+          update: { $set: { status: 'failed', errorMessage: 'Trainer not found', batchIndex } },
+        },
       })
       continue
     }
 
     try {
-      const message = await channel.buildMessage(campaign, trainer, layout)
-      const result = await channel.send({ address: recipient.address, message, campaign, recipient, trainer })
+      const message =
+        channelId === 'whatsapp' && waTemplate
+          ? buildWhatsAppMessageFromTemplate(campaign, trainer, waTemplate)
+          : await channel.buildMessage(campaign, trainer, layout, waTemplate)
+
+      const result = await channel.send({ address: recipient.address, message })
 
       if (result.error) {
-        await CampaignRecipient.findByIdAndUpdate(recipient._id, {
-          status: 'failed',
-          errorMessage: result.error,
-          batchIndex,
+        bulkOps.push({
+          updateOne: {
+            filter: { _id: recipient._id, status: 'pending' },
+            update: { $set: { status: 'failed', errorMessage: result.error, batchIndex } },
+          },
         })
       } else {
-        await CampaignRecipient.findByIdAndUpdate(recipient._id, {
-          status: 'sent',
-          providerMessageId: result.providerMessageId || '',
-          sentAt: new Date(),
-          batchIndex,
+        bulkOps.push({
+          updateOne: {
+            filter: { _id: recipient._id, status: 'pending' },
+            update: {
+              $set: {
+                status: 'sent',
+                providerMessageId: result.providerMessageId || '',
+                sentAt: new Date(),
+                batchIndex,
+              },
+            },
+          },
         })
       }
     } catch (err) {
-      const errorMessage = err.message || 'Send failed'
-      await CampaignRecipient.findByIdAndUpdate(recipient._id, {
-        status: 'failed',
-        errorMessage,
-        batchIndex,
+      bulkOps.push({
+        updateOne: {
+          filter: { _id: recipient._id, status: 'pending' },
+          update: {
+            $set: { status: 'failed', errorMessage: err.message || 'Send failed', batchIndex },
+          },
+        },
       })
     }
   }
 
-  // Any still-pending rows in this batch did not get a send attempt.
-  if (recipientIds.length > 0) {
-    await CampaignRecipient.updateMany(
-      { _id: { $in: recipientIds }, status: 'pending' },
-      { $set: { status: 'failed', errorMessage: 'Send did not complete', batchIndex } }
-    )
+  if (bulkOps.length) {
+    await CampaignRecipient.bulkWrite(bulkOps, { ordered: false })
   }
+
+  // Mark any batch rows still pending (cancel mid-batch, or loop exited early).
+  await CampaignRecipient.updateMany(
+    { _id: { $in: recipientIds }, status: 'pending' },
+    {
+      $set: cancelled
+        ? { status: 'skipped', errorMessage: 'Campaign cancelled', batchIndex }
+        : { status: 'failed', errorMessage: 'Send did not complete', batchIndex },
+    }
+  )
 
   await markBatchComplete(campaignId, channelId, batchIndex, totalBatches)
   await finalizeCampaignIfDone(campaignId)

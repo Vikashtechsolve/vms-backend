@@ -19,10 +19,14 @@ import trainerTagsRoutes from './routes/trainerTags.js'
 import campaignsRoutes from './routes/campaigns.js'
 import unsubscribeRoutes from './routes/unsubscribe.js'
 import sesWebhookRoutes from './routes/sesWebhook.js'
+import whatsappWebhookRoutes from './routes/whatsappWebhook.js'
+import whatsappTemplatesRoutes from './routes/whatsappTemplates.js'
+import messagingRoutes from './routes/messaging.js'
 import { backfillTrainers } from './helpers/backfillTrainers.js'
 import { registerAllChannels } from './services/messaging/index.js'
 import { seedEmailLayout, protectSystemLayouts } from './config/seedEmailLayout.js'
 import { seedTrainerTags } from './helpers/trainerTagService.js'
+import { seedWhatsAppTemplate } from './config/seedWhatsAppTemplate.js'
 import { pingRedis } from './config/redis.js'
 
 const app = express()
@@ -31,6 +35,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 app.use(cors(createCorsOptions()))
 app.use('/api/webhooks/ses', express.text({ type: '*/*' }), sesWebhookRoutes)
+app.use('/api/webhooks/whatsapp', express.raw({ type: 'application/json' }), whatsappWebhookRoutes)
 app.use(express.json({ limit: '10mb' }))
 app.use('/public', express.static(path.join(__dirname, 'public')))
 
@@ -46,6 +51,8 @@ app.use('/api/locations', locationsRoutes)
 app.use('/api/email-layouts', emailLayoutsRoutes)
 app.use('/api/trainer-tags', trainerTagsRoutes)
 app.use('/api/campaigns', campaignsRoutes)
+app.use('/api/whatsapp-templates', whatsappTemplatesRoutes)
+app.use('/api/messaging', messagingRoutes)
 app.use('/api/unsubscribe', unsubscribeRoutes)
 
 app.get('/api/health', async (req, res) => {
@@ -68,6 +75,7 @@ async function start() {
   await seedEmailLayout()
   await protectSystemLayouts()
   await seedTrainerTags()
+  await seedWhatsAppTemplate()
   // Older trainer records predate the derived filter fields; this is a no-op once done.
   await backfillTrainers().catch((err) => console.error('Trainer backfill skipped:', err.message))
   app.listen(PORT, () => {

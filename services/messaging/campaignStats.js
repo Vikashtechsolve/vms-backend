@@ -1,5 +1,11 @@
+import mongoose from 'mongoose'
 import Campaign from '../../models/Campaign.js'
 import CampaignRecipient from '../../models/CampaignRecipient.js'
+
+function toCampaignObjectId(campaignId) {
+  if (campaignId instanceof mongoose.Types.ObjectId) return campaignId
+  return new mongoose.Types.ObjectId(String(campaignId))
+}
 
 export function emptyChannelStats() {
   return {
@@ -14,18 +20,30 @@ export function emptyChannelStats() {
   }
 }
 
+/** Single aggregation query instead of 4 separate countDocuments — scales to 10k+ recipients. */
+async function aggregateRecipientStats(campaignId, channelId) {
+  const rows = await CampaignRecipient.aggregate([
+    { $match: { campaignId: toCampaignObjectId(campaignId), channel: channelId } },
+    { $group: { _id: '$status', count: { $sum: 1 } } },
+  ])
+
+  const counts = { sent: 0, failed: 0, skipped: 0, pending: 0, total: 0 }
+  for (const row of rows) {
+    counts.total += row.count
+    if (row._id === 'sent') counts.sent = row.count
+    else if (row._id === 'failed') counts.failed = row.count
+    else if (row._id === 'skipped') counts.skipped = row.count
+    else if (row._id === 'pending') counts.pending = row.count
+  }
+  return counts
+}
+
 /** Derive sent/failed/skipped counts from recipient rows — source of truth for the admin panel. */
 export async function syncChannelStatsFromRecipients(campaignId, channelId) {
   const campaign = await Campaign.findById(campaignId)
   if (!campaign) return null
 
-  const filter = { campaignId, channel: channelId }
-  const [sent, failed, skipped, total] = await Promise.all([
-    CampaignRecipient.countDocuments({ ...filter, status: 'sent' }),
-    CampaignRecipient.countDocuments({ ...filter, status: 'failed' }),
-    CampaignRecipient.countDocuments({ ...filter, status: 'skipped' }),
-    CampaignRecipient.countDocuments(filter),
-  ])
+  const { sent, failed, skipped, total } = await aggregateRecipientStats(campaignId, channelId)
 
   const existing = campaign.channelStats?.get?.(channelId) || emptyChannelStats()
   const stats = {
@@ -55,12 +73,15 @@ export async function markBatchComplete(campaignId, channelId, batchIndex, total
   const campaign = await Campaign.findById(campaignId)
   if (!campaign) return null
 
-  await syncChannelStatsFromRecipients(campaignId, channelId)
+  const { sent, failed, skipped, total } = await aggregateRecipientStats(campaignId, channelId)
 
-  const fresh = await Campaign.findById(campaignId)
-  const stats = { ...(fresh.channelStats?.get?.(channelId) || emptyChannelStats()) }
+  const stats = { ...(campaign.channelStats?.get?.(channelId) || emptyChannelStats()) }
+  stats.sentCount = sent
+  stats.failedCount = failed
+  stats.skippedCount = skipped
+  stats.totalRecipients = total || stats.totalRecipients
+
   const completed = new Set(stats.completedBatchIndices || [])
-
   if (!completed.has(batchIndex)) {
     completed.add(batchIndex)
     stats.completedBatchIndices = [...completed].sort((a, b) => a - b)
@@ -73,8 +94,8 @@ export async function markBatchComplete(campaignId, channelId, batchIndex, total
     stats.status = 'processing'
   }
 
-  fresh.channelStats.set(channelId, stats)
-  await fresh.save()
+  campaign.channelStats.set(channelId, stats)
+  await campaign.save()
   return stats
 }
 

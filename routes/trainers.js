@@ -268,6 +268,7 @@ router.post('/', uploadFields, async (req, res) => {
       source: 'admin',
       tags: [],
       tagSlugs: [],
+      whatsappOptIn: b.whatsappOptIn === true || b.whatsappOptIn === 'true' || b.whatsappOptIn === undefined,
     })
     await saveTrainerTags(trainer, parseTagSlugsInput(b, true))
     await trainer.save()
@@ -369,6 +370,10 @@ router.put('/:id', uploadFields, async (req, res) => {
     existing.additionalDetails = optional.additionalDetails
     existing.resume = resume
     if (comments !== undefined) existing.comments = comments
+    if (b.whatsappOptIn !== undefined) {
+      existing.whatsappOptIn = b.whatsappOptIn === true || b.whatsappOptIn === 'true'
+      if (existing.whatsappOptIn) existing.whatsappOptUnsubscribedAt = undefined
+    }
     await saveTrainerTags(existing, parseTagSlugsInput(b, true), previousTagSlugs)
     await existing.save()
     const out = existing.toJSON()

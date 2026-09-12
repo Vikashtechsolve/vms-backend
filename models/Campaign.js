@@ -28,6 +28,8 @@ const campaignSchema = new mongoose.Schema(
       index: true,
     },
     layoutId: { type: mongoose.Schema.Types.ObjectId, ref: 'EmailLayout' },
+    whatsappTemplateId: { type: mongoose.Schema.Types.ObjectId, ref: 'WhatsAppTemplate' },
+    whatsappBodyText: { type: String, default: '' },
     subject: { type: String, default: '' },
     bodyHtml: { type: String, default: '' },
     selectionMode: {
@@ -59,6 +61,7 @@ campaignSchema.set('toJSON', {
   transform: (doc, ret) => {
     ret.id = ret._id.toString()
     if (ret.layoutId) ret.layoutId = ret.layoutId.toString()
+    if (ret.whatsappTemplateId) ret.whatsappTemplateId = ret.whatsappTemplateId.toString()
     if (ret.channelStats instanceof Map) {
       ret.channelStats = Object.fromEntries(ret.channelStats)
     }
