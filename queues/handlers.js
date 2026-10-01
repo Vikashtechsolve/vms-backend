@@ -11,12 +11,13 @@ import {
   finalizeCampaignIfDone,
 } from '../services/messaging/campaignService.js'
 import {
-  emptyChannelStats,
   markBatchComplete,
+  syncChannelStatsFromRecipients,
 } from '../services/messaging/campaignStats.js'
 
 const ENQUEUE_CONCURRENCY = 25
 const CANCEL_CHECK_INTERVAL = 10
+const STATS_FLUSH_EVERY = 10
 
 function chunkArray(arr, size) {
   const chunks = []
@@ -33,27 +34,48 @@ async function enqueueBatchesParallel(channel, jobs) {
   }
 }
 
+function isRetryableSendError(err) {
+  const text = `${err?.name || ''} ${err?.message || ''}`
+  return /Throttl|TooManyRequests|LimitExceeded|ServiceUnavailable|Timeout|ECONN|ETIMEDOUT|EAI_AGAIN|NetworkingError|socket hang up|429/i.test(text)
+}
+
 export async function handleStartCampaign(job) {
   const { campaignId } = job.data
   const campaign = await Campaign.findById(campaignId)
-  if (!campaign) return
-  if (campaign.status === 'cancelled') return
+  if (!campaign || campaign.status === 'cancelled' || campaign.status === 'draft') return
+  if (campaign.status === 'completed' || campaign.status === 'failed') return
 
-  campaign.status = 'processing'
-  campaign.startedAt = new Date()
-  await campaign.save()
+  if (campaign.status === 'queued') {
+    const claimed = await Campaign.updateOne(
+      { _id: campaign._id, status: 'queued' },
+      { $set: { status: 'processing', startedAt: new Date() } }
+    )
+    if (claimed.matchedCount === 0) return
+  }
 
   const preparedCount = await ensureRecipientsPrepared(campaign)
   if (preparedCount === 0) {
-    campaign.status = 'failed'
-    campaign.lastError = 'No eligible recipients when preparing send'
-    campaign.completedAt = new Date()
-    await campaign.save()
+    await Campaign.updateOne(
+      { _id: campaign._id, status: { $in: ['queued', 'processing'] } },
+      {
+        $set: {
+          status: 'failed',
+          lastError: 'No eligible recipients when preparing send',
+          completedAt: new Date(),
+        },
+      }
+    )
     return
   }
 
   const activeCampaign = await Campaign.findById(campaignId)
-  if (!activeCampaign || activeCampaign.status === 'cancelled') return
+  if (!activeCampaign || activeCampaign.status === 'cancelled') {
+    await CampaignRecipient.updateMany(
+      { campaignId, status: 'pending' },
+      { $set: { status: 'skipped', errorMessage: 'Campaign cancelled' } }
+    )
+    return
+  }
 
   let anyBatches = false
 
@@ -73,12 +95,15 @@ export async function handleStartCampaign(job) {
     const batches = chunkArray(ids, channel.batchSize)
     const totalBatches = batches.length
 
-    const stats = activeCampaign.channelStats?.get?.(channelId) || emptyChannelStats()
-    stats.totalBatches = totalBatches
-    stats.completedBatches = 0
-    stats.completedBatchIndices = []
-    stats.status = totalBatches > 0 ? 'processing' : 'completed'
-    activeCampaign.channelStats.set(channelId, stats)
+    await Campaign.collection.updateOne(
+      { _id: activeCampaign._id, status: { $ne: 'cancelled' } },
+      {
+        $set: {
+          [`channelStats.${channelId}.totalBatches`]: totalBatches,
+          [`channelStats.${channelId}.status`]: totalBatches > 0 ? 'processing' : 'completed',
+        },
+      }
+    )
 
     if (totalBatches === 0) continue
 
@@ -92,8 +117,6 @@ export async function handleStartCampaign(job) {
     }))
     await enqueueBatchesParallel(channel, jobs)
   }
-
-  await activeCampaign.save()
 
   if (!anyBatches) {
     await finalizeCampaignIfDone(campaignId)
@@ -131,9 +154,19 @@ export async function handleSendBatch(job) {
   const trainers = await Trainer.find({ _id: { $in: trainerIds } }).lean()
   const trainerMap = new Map(trainers.map((t) => [t._id.toString(), t]))
 
-  const bulkOps = []
   let cancelled = false
   let processed = 0
+  let retryableError = null
+
+  async function recordRecipient(recipientId, fields) {
+    await CampaignRecipient.updateOne(
+      { _id: recipientId, status: 'pending' },
+      { $set: { ...fields, batchIndex } }
+    )
+    if (processed % STATS_FLUSH_EVERY === 0) {
+      await syncChannelStatsFromRecipients(campaignId, channelId)
+    }
+  }
 
   for (const recipient of recipients) {
     processed += 1
@@ -147,12 +180,7 @@ export async function handleSendBatch(job) {
 
     const trainer = trainerMap.get(recipient.trainerId.toString())
     if (!trainer) {
-      bulkOps.push({
-        updateOne: {
-          filter: { _id: recipient._id, status: 'pending' },
-          update: { $set: { status: 'failed', errorMessage: 'Trainer not found', batchIndex } },
-        },
-      })
+      await recordRecipient(recipient._id, { status: 'failed', errorMessage: 'Trainer not found' })
       continue
     }
 
@@ -165,52 +193,40 @@ export async function handleSendBatch(job) {
       const result = await channel.send({ address: recipient.address, message })
 
       if (result.error) {
-        bulkOps.push({
-          updateOne: {
-            filter: { _id: recipient._id, status: 'pending' },
-            update: { $set: { status: 'failed', errorMessage: result.error, batchIndex } },
-          },
-        })
+        await recordRecipient(recipient._id, { status: 'failed', errorMessage: result.error })
       } else {
-        bulkOps.push({
-          updateOne: {
-            filter: { _id: recipient._id, status: 'pending' },
-            update: {
-              $set: {
-                status: 'sent',
-                providerMessageId: result.providerMessageId || '',
-                sentAt: new Date(),
-                batchIndex,
-              },
-            },
-          },
+        await recordRecipient(recipient._id, {
+          status: 'sent',
+          providerMessageId: result.providerMessageId || '',
+          sentAt: new Date(),
         })
       }
     } catch (err) {
-      bulkOps.push({
-        updateOne: {
-          filter: { _id: recipient._id, status: 'pending' },
-          update: {
-            $set: { status: 'failed', errorMessage: err.message || 'Send failed', batchIndex },
-          },
-        },
+      if (isRetryableSendError(err)) {
+        retryableError = err
+        break
+      }
+      await recordRecipient(recipient._id, {
+        status: 'failed',
+        errorMessage: err.message || 'Send failed',
       })
     }
   }
 
-  if (bulkOps.length) {
-    await CampaignRecipient.bulkWrite(bulkOps, { ordered: false })
+  await syncChannelStatsFromRecipients(campaignId, channelId)
+
+  if (cancelled) {
+    await CampaignRecipient.updateMany(
+      { _id: { $in: recipientIds }, status: 'pending' },
+      { $set: { status: 'skipped', errorMessage: 'Campaign cancelled', batchIndex } }
+    )
+    await syncChannelStatsFromRecipients(campaignId, channelId)
+    await markBatchComplete(campaignId, channelId, batchIndex, totalBatches)
+    await finalizeCampaignIfDone(campaignId)
+    return
   }
 
-  // Mark any batch rows still pending (cancel mid-batch, or loop exited early).
-  await CampaignRecipient.updateMany(
-    { _id: { $in: recipientIds }, status: 'pending' },
-    {
-      $set: cancelled
-        ? { status: 'skipped', errorMessage: 'Campaign cancelled', batchIndex }
-        : { status: 'failed', errorMessage: 'Send did not complete', batchIndex },
-    }
-  )
+  if (retryableError) throw retryableError
 
   await markBatchComplete(campaignId, channelId, batchIndex, totalBatches)
   await finalizeCampaignIfDone(campaignId)

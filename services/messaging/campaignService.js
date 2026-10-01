@@ -108,25 +108,22 @@ export async function ensureRecipientsPrepared(campaign) {
 
   await insertRecipientsInBatches(recipients)
 
-  const channelStats =
-    campaign.channelStats instanceof Map
-      ? campaign.channelStats
-      : new Map(Object.entries(campaign.channelStats || {}))
-
   const countByChannel = await CampaignRecipient.aggregate([
     { $match: { campaignId: campaign._id } },
     { $group: { _id: '$channel', count: { $sum: 1 } } },
   ])
   const countMap = new Map(countByChannel.map((r) => [r._id, r.count]))
 
+  const totals = {}
   for (const ch of campaign.channels || []) {
-    const stats = channelStats.get(ch) || emptyChannelStats()
-    stats.totalRecipients = countMap.get(ch) || 0
-    channelStats.set(ch, stats)
+    totals[`channelStats.${ch}.totalRecipients`] = countMap.get(ch) || 0
   }
-
-  campaign.channelStats = channelStats
-  await campaign.save()
+  if (Object.keys(totals).length) {
+    await Campaign.collection.updateOne(
+      { _id: campaign._id, status: { $ne: 'cancelled' } },
+      { $set: totals }
+    )
+  }
 
   return recipients.length
 }

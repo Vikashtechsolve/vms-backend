@@ -11,7 +11,12 @@ import {
   queueCampaignSend,
   cancelCampaign,
 } from '../services/messaging/campaignService.js'
-import { refreshCampaignStatusFromRecipients } from '../services/messaging/campaignStats.js'
+import {
+  applyRecipientCounts,
+  loadRecipientCountIndex,
+  outcomeStatusFromStats,
+  refreshCampaignStatusFromRecipients,
+} from '../services/messaging/campaignStats.js'
 
 const router = Router()
 
@@ -19,6 +24,30 @@ router.use(authMiddleware)
 
 function campaignPayload(doc) {
   return doc.toJSON()
+}
+
+/** Keep the list badge in line with delivery totals without touching drafts or live sends. */
+async function alignTerminalStatuses(payloads) {
+  const completedIds = []
+  const failedIds = []
+
+  for (const item of payloads) {
+    if (!['completed', 'failed'].includes(item.status)) continue
+    const outcome = outcomeStatusFromStats(item.channelStats)
+    if (outcome === item.status) continue
+    item.status = outcome
+    if (outcome === 'completed') completedIds.push(item.id)
+    else failedIds.push(item.id)
+  }
+
+  await Promise.all([
+    completedIds.length
+      ? Campaign.updateMany({ _id: { $in: completedIds }, status: 'failed' }, { $set: { status: 'completed' } })
+      : null,
+    failedIds.length
+      ? Campaign.updateMany({ _id: { $in: failedIds }, status: 'completed' }, { $set: { status: 'failed' } })
+      : null,
+  ])
 }
 
 router.get('/', async (req, res) => {
@@ -34,8 +63,11 @@ router.get('/', async (req, res) => {
       Campaign.countDocuments(filter),
     ])
 
+    const counts = await loadRecipientCountIndex(items.map((c) => c._id))
+    const payloads = items.map((c) => applyRecipientCounts(campaignPayload(c), counts))
+    await alignTerminalStatuses(payloads)
     res.json({
-      items: items.map((c) => campaignPayload(c)),
+      items: payloads,
       total,
       page,
       limit,
@@ -55,7 +87,8 @@ router.get('/:id', async (req, res) => {
     if (['queued', 'processing', 'completed', 'failed'].includes(campaign.status)) {
       await refreshCampaignStatusFromRecipients(campaign._id)
       const refreshed = await Campaign.findById(req.params.id)
-      return res.json(campaignPayload(refreshed))
+      const counts = await loadRecipientCountIndex([refreshed._id])
+      return res.json(applyRecipientCounts(campaignPayload(refreshed), counts))
     }
 
     res.json(campaignPayload(campaign))
